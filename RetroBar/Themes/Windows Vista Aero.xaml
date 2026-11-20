@@ -559,6 +559,40 @@
                                         Value="{DynamicResource TaskbarMaximizedVerticalBackground}" />
                             </MultiDataTrigger.Setters>
                         </MultiDataTrigger>
+                        <!-- Aero glass turned off: the opaque look Vista used when glass was unavailable -->
+                        <DataTrigger Binding="{Binding Path=IsAeroGlassEnabled, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
+                                     Value="False">
+                            <DataTrigger.Setters>
+                                <Setter TargetName="TaskbarTopBorder"
+                                        Property="BorderBrush"
+                                        Value="{DynamicResource TaskbarMaximizedTopBorder}" />
+                                <Setter TargetName="TaskbarTopInnerBorder"
+                                        Property="BorderBrush"
+                                        Value="{DynamicResource TaskbarMaximizedTopInnerBorder}" />
+                                <Setter TargetName="TaskbarBottomBorder"
+                                        Property="BorderBrush"
+                                        Value="{DynamicResource TaskbarMaximizedBottomBorder}" />
+                                <Setter TargetName="TaskbarBottomInnerBorder"
+                                        Property="BorderBrush"
+                                        Value="{DynamicResource TaskbarMaximizedBottomInnerBorder}" />
+                                <Setter TargetName="TaskbarBottomInnerBorder"
+                                        Property="Background"
+                                        Value="{DynamicResource TaskbarMaximizedBackground}" />
+                            </DataTrigger.Setters>
+                        </DataTrigger>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding Path=IsAeroGlassEnabled, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
+                                           Value="False" />
+                                <Condition Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
+                                           Value="Vertical" />
+                            </MultiDataTrigger.Conditions>
+                            <MultiDataTrigger.Setters>
+                                <Setter TargetName="TaskbarBottomInnerBorder"
+                                        Property="Background"
+                                        Value="{DynamicResource TaskbarMaximizedVerticalBackground}" />
+                            </MultiDataTrigger.Setters>
+                        </MultiDataTrigger>
                     </ControlTemplate.Triggers> 
                 </ControlTemplate>
             </Setter.Value>

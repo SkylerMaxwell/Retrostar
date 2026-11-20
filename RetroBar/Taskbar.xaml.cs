@@ -33,6 +33,21 @@ namespace RetroBar
             get => (bool)GetValue(HasMaximizedWindowProperty);
             private set => SetValue(HasMaximizedWindowProperty, value);
         }
+
+        public static readonly DependencyProperty IsAeroGlassEnabledProperty =
+            DependencyProperty.Register("IsAeroGlassEnabled", typeof(bool), typeof(Taskbar),
+                new PropertyMetadata(true));
+
+        /// <summary>
+        /// Whether the Aero glass effect is turned on. Glass themes bind to this to switch
+        /// between the translucent glass look and the opaque (Basic) look.
+        /// </summary>
+        public bool IsAeroGlassEnabled
+        {
+            get => (bool)GetValue(IsAeroGlassEnabledProperty);
+            private set => SetValue(IsAeroGlassEnabledProperty, value);
+        }
+
         public bool IsLocked => Settings.Instance.LockTaskbar;
         public bool IsScaled => DpiScale > 1 || Settings.Instance.TaskbarScale > 1;
 
@@ -70,6 +85,8 @@ namespace RetroBar
             this.hotkeyManager = hotkeyManager;
 
             InitializeComponent();
+
+            IsAeroGlassEnabled = Settings.Instance.EnableAeroGlass;
 
             _maximizedWindowTimer = new DispatcherTimer
             {
@@ -166,7 +183,7 @@ namespace RetroBar
                     return;
                 }
 
-                SetBlur(AllowsBlur());
+                UpdateBlur();
                 PeekDuringAutoHide();
                 RecalculateSize();
                 UpdateMaximizedWindowTimer();
@@ -258,7 +275,12 @@ namespace RetroBar
             }
             else if (e.PropertyName == nameof(Settings.AllowBlurBehind))
             {
-                SetBlur(AllowsBlur());
+                UpdateBlur();
+            }
+            else if (e.PropertyName == nameof(Settings.EnableAeroGlass))
+            {
+                IsAeroGlassEnabled = Settings.Instance.EnableAeroGlass;
+                UpdateBlur();
             }
             else if (e.PropertyName == nameof(Settings.AllowAlternateMaximizedAppearance))
             {
@@ -335,7 +357,7 @@ namespace RetroBar
             base.OnSourceInitialized(sender, e);
 
             SetLayoutRounding();
-            SetBlur(AllowsBlur());
+            UpdateBlur();
             UpdateTrayPosition();
         }
             
@@ -427,6 +449,12 @@ namespace RetroBar
         protected override void OnAutoHideAnimationComplete(bool isHiding)
         {
             base.OnAutoHideAnimationComplete(isHiding);
+
+            if (!isHiding && AllowsBlur())
+            {
+                // ManagedShell re-applies its own blur when the bar is shown again
+                ApplyGlassBlur();
+            }
 
             if (isHiding && Settings.Instance.AutoHideTransparent && AllowsTransparency && AllowAutoHide)
             {
@@ -672,8 +700,35 @@ namespace RetroBar
 
         private bool AllowsBlur()
         {
-            return Settings.Instance.AllowBlurBehind &&
+            return Settings.Instance.EnableAeroGlass &&
+                   Settings.Instance.AllowBlurBehind &&
                    (Application.Current.FindResource("AllowsTransparency") as bool? ?? false);
+        }
+
+        private void UpdateBlur()
+        {
+            bool allowsBlur = AllowsBlur();
+            SetBlur(allowsBlur);
+
+            if (allowsBlur)
+            {
+                ApplyGlassBlur();
+            }
+        }
+
+        /// <summary>
+        /// Replaces the Acrylic blur that ManagedShell applies with a plain Gaussian blur,
+        /// which matches Vista's glass. Skipped while the bar is auto-hidden, the same as
+        /// ManagedShell does; OnAutoHideAnimationComplete applies it again when the bar shows.
+        /// </summary>
+        private void ApplyGlassBlur()
+        {
+            if (Handle == IntPtr.Zero || !AllowsTransparency || (AppBarMode == AppBarMode.AutoHide && AllowAutoHide))
+            {
+                return;
+            }
+
+            AeroGlassHelper.SetGlassBlur(Handle, true);
         }
 
         #region Unlocked taskbar drag hook

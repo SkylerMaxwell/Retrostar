@@ -426,7 +426,7 @@ namespace RetroBar.Utilities
             set => SetEnum(ref _clockClickAction, value);
         }
 
-        private bool _checkForUpdates = true;
+        private bool _checkForUpdates = false;
         public bool CheckForUpdates
         {
             get => _checkForUpdates;
@@ -480,6 +480,13 @@ namespace RetroBar.Utilities
         {
             get => _winNumHotkeysAction;
             set => SetEnum(ref _winNumHotkeysAction, value);
+        }
+
+        private bool _enableAeroGlass = true;
+        public bool EnableAeroGlass
+        {
+            get => _enableAeroGlass;
+            set => Set(ref _enableAeroGlass, value);
         }
 
         private bool _allowBlurBehind = true;

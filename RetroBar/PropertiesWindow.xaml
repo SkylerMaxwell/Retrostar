@@ -509,7 +509,12 @@
                     </GroupBox>
                     <GroupBox Header="{DynamicResource behavior_heading}" DockPanel.Dock="Top">
                         <StackPanel Orientation="Vertical">
+                            <CheckBox x:Name="cbEnableAeroGlass"
+                                      IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=EnableAeroGlass, UpdateSourceTrigger=PropertyChanged}">
+                                <Label Content="{DynamicResource enable_aero_glass}" />
+                            </CheckBox>
                             <CheckBox x:Name="cbAllowBlurBehind"
+                                      IsEnabled="{Binding Source={x:Static Settings:Settings.Instance}, Path=EnableAeroGlass, UpdateSourceTrigger=PropertyChanged}"
                                       IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=AllowBlurBehind, UpdateSourceTrigger=PropertyChanged}">
                                 <Label Content="{DynamicResource allow_blur_behind}" />
                             </CheckBox>
