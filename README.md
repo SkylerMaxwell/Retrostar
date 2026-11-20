@@ -1,6 +1,6 @@
 ﻿![Retrostar screenshot](retrobar-preview.png)
 
-# Retrostar
+# Retrostar New
 
 Retrostar is a fork of [RetroBar](https://github.com/dremin/RetroBar). It replaces the modern Windows taskbar with the classic Windows 95, 98, Me, 2000, XP, Vista, or 7 look, and adds a Vista- or Windows 7-style Start menu with Aero glass.
 
