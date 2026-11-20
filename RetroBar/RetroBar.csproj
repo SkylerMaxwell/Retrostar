@@ -1,0 +1,76 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFrameworks>net6.0-windows;net10.0-windows</TargetFrameworks>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <StartupObject>RetroBar.Program</StartupObject>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyVersion>1.0.0.8</AssemblyVersion>
+    <FileVersion>1.0.0.8</FileVersion>
+    <ApplicationIcon>Resources\retrobar.ico</ApplicationIcon>
+    <Platforms>AnyCPU;x86;ARM64</Platforms>
+    <LangVersion>12</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+	<RuntimeHostConfigurationOption Include="Switch.System.Windows.Media.EnableHardwareAccelerationInRdp" Value="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Resources\**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <SubType>Designer</SubType>
+    </None>
+    <None Include="Themes\*.xaml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <SubType>Designer</SubType>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+	<None Remove="Resources\desktop95-sm.png" />
+	<None Remove="Resources\desktop95-lg.png" />
+	<None Remove="Resources\help.png" />
+    <None Remove="Resources\retrobar.ico" />
+    <None Remove="Resources\shader_invert.ps" />
+    <None Remove="Resources\start9x.png" />
+    <None Remove="Themes\System.xaml" />
+  </ItemGroup>
+
+  <!--
+    Languages live at the repository root (..\Languages), outside this project folder, so the SDK does not pick them
+    up by itself. Link puts each file back at Languages\<name>.xaml inside the build, so nothing changes at runtime:
+    - Page compiles every language as before; English.xaml is loaded from the app at pack path Languages/English.xaml
+      (App.xaml and DictionaryManager).
+    - None copies every language except English.xaml to Languages\ beside the exe, where DictionaryManager lists and
+      loads them by file name.
+  -->
+  <ItemGroup>
+    <Page Include="..\Languages\*.xaml" Link="Languages\%(Filename)%(Extension)" />
+    <None Include="..\Languages\*.xaml" Exclude="..\Languages\English.xaml" Link="Languages\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <SubType>Designer</SubType>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="gong-wpf-dragdrop" Version="3.1.1" />
+    <PackageReference Include="ManagedShell" Version="0.0.372" />
+    <PackageReference Include="Nerdbank.GitVersioning" Version="3.9.50" PrivateAssets="all" />
+    <PackageReference Include="System.Data.OleDb" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+	<Resource Include="Resources\desktop95-sm.png" />
+	<Resource Include="Resources\desktop95-lg.png" />
+	<Resource Include="Resources\help.png" />
+    <Resource Include="Resources\shader_invert.ps" />
+    <Resource Include="Resources\retrobar.ico">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Resource>
+    <Resource Include="Resources\start9x.png" />
+  </ItemGroup>
+
+</Project>

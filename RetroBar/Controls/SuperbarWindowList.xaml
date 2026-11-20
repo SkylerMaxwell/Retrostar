@@ -1,0 +1,235 @@
+﻿<Window x:Class="RetroBar.Controls.SuperbarWindowList"
+        x:ClassModifier="internal"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Name="Root"
+        Title=""
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        ResizeMode="NoResize"
+        SizeToContent="WidthAndHeight"
+        WindowStartupLocation="Manual"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        FontFamily="Segoe UI"
+        FontSize="12"
+        TextOptions.TextFormattingMode="Display"
+        SourceInitialized="Window_SourceInitialized">
+    <Window.Resources>
+
+        <!-- Glass frame: tinted like the Windows 7 taskbar, lightest at the top -->
+        <LinearGradientBrush x:Key="GlassFrameBackground" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#B04A7DA8" Offset="0.0" />
+            <GradientStop Color="#A8335F86" Offset="0.5" />
+            <GradientStop Color="#B02A5178" Offset="1.0" />
+        </LinearGradientBrush>
+        <!-- Windows 7 Basic: an opaque light frame -->
+        <LinearGradientBrush x:Key="BasicFrameBackground" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#FFF5F8FC" Offset="0.0" />
+            <GradientStop Color="#FFE3EBF5" Offset="1.0" />
+        </LinearGradientBrush>
+
+        <LinearGradientBrush x:Key="GlassTileHover" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#55FFFFFF" Offset="0.0" />
+            <GradientStop Color="#30FFFFFF" Offset="0.5" />
+            <GradientStop Color="#20FFFFFF" Offset="1.0" />
+        </LinearGradientBrush>
+        <LinearGradientBrush x:Key="BasicRowHover" StartPoint="0,0" EndPoint="0,1">
+            <GradientStop Color="#FFF2F8FE" Offset="0.0" />
+            <GradientStop Color="#FFDCEBFC" Offset="1.0" />
+        </LinearGradientBrush>
+
+        <DropShadowEffect x:Key="GlassTextGlow" BlurRadius="8" ShadowDepth="0" Opacity="0.9" Color="White" />
+
+        <ItemsPanelTemplate x:Key="HorizontalPanel">
+            <StackPanel Orientation="Horizontal" />
+        </ItemsPanelTemplate>
+        <ItemsPanelTemplate x:Key="VerticalPanel">
+            <StackPanel Orientation="Vertical" />
+        </ItemsPanelTemplate>
+
+        <!-- The red close button shown on the hovered window -->
+        <Style x:Key="CloseButton" TargetType="Button">
+            <Setter Property="OverridesDefaultStyle" Value="True" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Width" Value="16" />
+            <Setter Property="Height" Value="16" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                CornerRadius="3"
+                                BorderThickness="1"
+                                BorderBrush="#FF6D1810">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                    <GradientStop Color="#FFE8A493" Offset="0.0" />
+                                    <GradientStop Color="#FFD4573B" Offset="0.5" />
+                                    <GradientStop Color="#FFC2381D" Offset="0.5" />
+                                    <GradientStop Color="#FFD86F4E" Offset="1.0" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <Path Data="M 0,0 L 6,6 M 6,0 L 0,6"
+                                  Stroke="#FFFFFFFF"
+                                  StrokeThickness="1.6"
+                                  HorizontalAlignment="Center"
+                                  VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background">
+                                    <Setter.Value>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                            <GradientStop Color="#FFF5B9A8" Offset="0.0" />
+                                            <GradientStop Color="#FFEC6A4B" Offset="0.5" />
+                                            <GradientStop Color="#FFD9381A" Offset="0.5" />
+                                            <GradientStop Color="#FFF0A472" Offset="1.0" />
+                                        </LinearGradientBrush>
+                                    </Setter.Value>
+                                </Setter>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#FFA4271A" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- A window with its live thumbnail, drawn by DWM over the ThumbnailHost area -->
+        <DataTemplate x:Key="ThumbnailTemplate">
+            <Border x:Name="Tile"
+                    Margin="2"
+                    Padding="8,6,8,8"
+                    CornerRadius="3"
+                    BorderThickness="1"
+                    BorderBrush="Transparent"
+                    Background="#01FFFFFF"
+                    MouseLeftButtonUp="Window_MouseLeftButtonUp"
+                    MouseUp="Window_MouseUp">
+                <StackPanel Width="{Binding ThumbnailWidth, ElementName=Root}">
+                    <Grid Height="18"
+                          Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Image Grid.Column="0"
+                               Source="{Binding Path=Icon, Mode=OneWay}"
+                               Width="16"
+                               Height="16"
+                               Margin="0,0,5,0" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding Path=Title, Mode=OneWay}"
+                                   Foreground="#FF000000"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"
+                                   Effect="{StaticResource GlassTextGlow}" />
+                        <Button x:Name="CloseButton"
+                                Grid.Column="2"
+                                Margin="4,0,0,0"
+                                Style="{StaticResource CloseButton}"
+                                Visibility="Hidden"
+                                Click="CloseButton_Click" />
+                    </Grid>
+                    <Border x:Name="ThumbnailHost"
+                            Width="{Binding ThumbnailWidth, ElementName=Root}"
+                            Height="{Binding ThumbnailHeight, ElementName=Root}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Background="Transparent" />
+                </StackPanel>
+            </Border>
+            <DataTemplate.Triggers>
+                <Trigger SourceName="Tile" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Tile" Property="Background" Value="{StaticResource GlassTileHover}" />
+                    <Setter TargetName="Tile" Property="BorderBrush" Value="#99FFFFFF" />
+                    <Setter TargetName="CloseButton" Property="Visibility" Value="Visible" />
+                </Trigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+        <!-- A window as a row of the list shown without thumbnails (Windows 7 Basic) -->
+        <DataTemplate x:Key="ListTemplate">
+            <Border x:Name="Row"
+                    Height="26"
+                    Padding="6,0,4,0"
+                    CornerRadius="3"
+                    BorderThickness="1"
+                    BorderBrush="Transparent"
+                    Background="#01FFFFFF"
+                    MouseLeftButtonUp="Window_MouseLeftButtonUp"
+                    MouseUp="Window_MouseUp">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Image Grid.Column="0"
+                           Source="{Binding Path=Icon, Mode=OneWay}"
+                           Width="16"
+                           Height="16"
+                           Margin="0,0,6,0" />
+                    <TextBlock Grid.Column="1"
+                               x:Name="RowText"
+                               Text="{Binding Path=Title, Mode=OneWay}"
+                               Foreground="#FF000000"
+                               VerticalAlignment="Center"
+                               MaxWidth="260"
+                               TextTrimming="CharacterEllipsis" />
+                    <Button x:Name="CloseButton"
+                            Grid.Column="2"
+                            Margin="8,0,0,0"
+                            Style="{StaticResource CloseButton}"
+                            Visibility="Hidden"
+                            Click="CloseButton_Click" />
+                </Grid>
+            </Border>
+            <DataTemplate.Triggers>
+                <Trigger SourceName="Row" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Row" Property="Background" Value="{StaticResource BasicRowHover}" />
+                    <Setter TargetName="Row" Property="BorderBrush" Value="#FF7DA2CE" />
+                    <Setter TargetName="CloseButton" Property="Visibility" Value="Visible" />
+                </Trigger>
+                <DataTrigger Binding="{Binding IsGlass, ElementName=Root}" Value="True">
+                    <Setter TargetName="RowText" Property="Effect" Value="{StaticResource GlassTextGlow}" />
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+    <!-- Glass tint layer, faded by the Aero glass transparency setting -->
+    <Border x:Name="Frame"
+            CornerRadius="6"
+            BorderThickness="1"
+            BorderBrush="#CC000000"
+            Opacity="{Binding GlassTintOpacity, ElementName=Root}">
+        <Border.Style>
+            <Style TargetType="Border">
+                <Setter Property="Background" Value="{StaticResource GlassFrameBackground}" />
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding IsGlass, ElementName=Root}" Value="False">
+                        <Setter Property="Background" Value="{StaticResource BasicFrameBackground}" />
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+        </Border.Style>
+    </Border>
+    <Border Margin="1"
+            CornerRadius="5"
+            BorderThickness="1"
+            BorderBrush="#66FFFFFF"
+            Padding="5">
+        <ItemsControl x:Name="WindowsList"
+                      Focusable="False" />
+    </Border>
+    </Grid>
+</Window>

@@ -1,0 +1,43 @@
+﻿<UserControl x:Class="RetroBar.Controls.SuperbarButton"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:converters="clr-namespace:RetroBar.Converters"
+             xmlns:utilities="clr-namespace:RetroBar.Utilities"
+             Loaded="SuperbarButton_OnLoaded"
+             Unloaded="SuperbarButton_OnUnloaded"
+             DataContextChanged="SuperbarButton_OnDataContextChanged">
+    <UserControl.Resources>
+        <converters:BoolToVisibilityConverter x:Key="boolToVisibilityConverter" />
+    </UserControl.Resources>
+    <!-- The look (glass or Basic) comes from the theme's SuperbarButton and SuperbarButtonBasic styles, chosen in code -->
+    <Button x:Name="AppButton"
+            Click="AppButton_OnClick"
+            PreviewMouseLeftButtonDown="AppButton_OnPreviewMouseLeftButtonDown"
+            PreviewMouseLeftButtonUp="AppButton_OnPreviewMouseLeftButtonUp"
+            MouseMove="AppButton_OnMouseMove"
+            MouseEnter="AppButton_OnMouseEnter"
+            MouseLeave="AppButton_OnMouseLeave"
+            MouseUp="AppButton_OnMouseUp"
+            MouseWheel="AppButton_OnMouseWheel"
+            ContextMenuOpening="AppButton_OnContextMenuOpening"
+            DragEnter="AppButton_OnDragEnter"
+            DragLeave="AppButton_OnDragLeave"
+            ToolTipService.ShowDuration="60000">
+        <Grid>
+            <Image Source="{Binding Path=Icon, Mode=OneWay}"
+                   Style="{DynamicResource SuperbarIcon}" />
+            <Image Source="{Binding Path=OverlayWindow.OverlayIcon, Mode=OneWay}"
+                   Style="{DynamicResource SuperbarOverlayIcon}"
+                   Visibility="{Binding Source={x:Static utilities:Settings.Instance}, Path=ShowTaskBadges, UpdateSourceTrigger=PropertyChanged, Converter={StaticResource boolToVisibilityConverter}}" />
+        </Grid>
+        <Button.ContextMenu>
+            <ContextMenu x:Name="ButtonMenu"
+                         Opened="ButtonMenu_OnOpened"
+                         Closed="ButtonMenu_OnClosed">
+                <TextOptions.TextRenderingMode>
+                    <Binding Source="{x:Static utilities:Settings.Instance}" Path="AllowFontSmoothingMenu" Converter="{StaticResource menuTextRenderingModeConverter}" />
+                </TextOptions.TextRenderingMode>
+            </ContextMenu>
+        </Button.ContextMenu>
+    </Button>
+</UserControl>

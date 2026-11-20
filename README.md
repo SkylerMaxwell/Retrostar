@@ -1,115 +1,41 @@
-﻿![RetroBar screenshot](https://raw.githubusercontent.com/dremin/retrobar/master/retrobar-preview.png)
+﻿![Retrostar screenshot](retrobar-preview.png)
 
 # Retrostar
-[![Current release](https://img.shields.io/github/v/release/dremin/RetroBar)](https://github.com/dremin/RetroBar/releases/latest) ![Build status](https://github.com/dremin/RetroBar/workflows/RetroBar/badge.svg)  [![Discord](https://img.shields.io/badge/discord-white?logo=discord)](https://discord.gg/8bGuPmerxC)
 
-Pining for simpler times? RetroBar teleports you back in time by replacing your modern Windows taskbar with the classic Windows 95, 98, Me, 2000, XP, or Vista style.
+Retrostar is a fork of [RetroBar](https://github.com/dremin/RetroBar). It replaces the modern Windows taskbar with the classic Windows 95, 98, Me, 2000, XP, Vista, or 7 look, and adds a Vista- or Windows 7-style Start menu with Aero glass.
 
-RetroBar is based on the [ManagedShell](https://github.com/cairoshell/ManagedShell) library for great compatibility and performance.
+It is built on the [ManagedShell](https://github.com/cairoshell/ManagedShell) library.
+
+## What Retrostar adds
+- Vista-style Start menu with pinned programs, All Programs, a right-hand column, and a power strip
+- Local Start menu search of programs and files, with no web results
+- Aero glass blur for the taskbar and Start menu, controlled by one setting
+- Start orb that sits above the open menu
+- Windows key and Ctrl+Esc open the Vista menu
+- Windows 7 taskbar (Windows 7 Aero and Windows 7 Basic themes): icon-only buttons that combine each program's windows, pinned programs, live thumbnails, a hover glow in the icon's colour, and a Show Desktop strip
+- Windows 7 Start menu, chosen in Properties > Start Menu: search box in the program list, Devices and Printers, and a Shut down button
+
+## Features
+- Classic taskbar with a native notification area, task list, and Quick Launch toolbar
+- Taskbar on any side of the screen, resizable, with multiple rows and multiple monitors
+- Auto-hide, locked and unlocked appearances, and Vista-style window thumbnails
+- Input language switcher
+- Themes from Windows 95 through Vista, plus custom theme and language support
 
 ## Requirements
 - Windows 7 SP1, Windows 8.1, Windows 10, or Windows 11
-  - Fresh installs of Windows 7 may require additional Windows updates. See [#1319](https://github.com/dremin/RetroBar/issues/1319) for details.
-- Microsoft .NET Desktop Runtime - When using the RetroBar installer, this is automatically downloaded and installed if necessary. If you're using the portable version, you will be prompted to download on first launch.
+- Microsoft .NET Desktop Runtime. The installer downloads it if needed; the portable version prompts you on first launch.
 
-## Features
-- Replaces default Windows taskbar with classic layout
-- Native notification area with balloon notification support
-- Native task list with UWP app support and drag reordering
-- Quick launch toolbar
-- Start button opens modern start menu
-- Ability to show or hide the clock
-- Ability to auto-hide the taskbar
-- Locked and unlocked taskbar appearances
-- Display taskbar on any side of the screen (even on Windows 11)
-- Resizable taskbar with support for multiple rows
-- Option to display the taskbar, notification area, and clock on multiple monitors
-- Ability to show Vista-style window thumbnails
-- Customizable XP-style collapsible notification area with drag reordering
-- Input language and keyboard layout switcher
-- Custom theme support
+Installer and portable builds are produced by the GitHub Actions workflow.
 
-## Included themes
-- System (Classic, XP, and Vista)
-- Watercolor
-- Windows 95-98
-- Windows Me
-- Windows 2000
-- Windows XP:
-  - Classic
-  - Blue
-  - Olive Green
-  - Silver
-  - Royale
-  - Royale Noir
-  - Embedded Style
-  - Zune Style
-- Windows Longhorn Aero
-- Windows Vista:
-  - Aero
-  - Basic
-  - Classic
+## Custom themes and languages
+Install community theme files in Properties > Advanced, or place `.xaml` files in a `Themes` or `Languages` folder in `%localappdata%\RetroBar`. Themes use the XAML `ResourceDictionary` format; the files in `RetroBar/Themes` are good examples.
 
-Looking for more themes? [Check out the great community-made RetroBar themes on DeviantArt](https://www.deviantart.com/tag/retrobar), and the theme-repository channel on [our Discord](https://discord.gg/8bGuPmerxC)!
+## Privacy
+No telemetry, analytics, or crash reporting. The update checker is off by default.
 
-## Supported languages
-- Arabic (العربية)
-- Basque (euskara)
-- Belarusian (беларуская)
-- Bulgarian (български)
-- Catalan (català)
-- Chinese (Simplified) (中文(简体))
-- Chinese (Traditional) (中文(繁體))
-- Croatian (hrvatski)
-- Czech (čeština)
-- Danish (dansk)
-- Dutch (Nederlands)
-- English
-- English (United Kingdom)
-- Finnish (Suomi)
-- French (français)
-- German (Deutsch)
-- Greek (ελληνικά)
-- Hebrew (עברית)
-- Hungarian (magyar)
-- Icelandic (íslenska)
-- Indonesian (Indonesia)
-- Italian (italiano)
-- Japanese (日本語)
-- Korean (한국어)
-- Latvian (latviešu)
-- Lithuanian (lietuvių)
-- Luxembourgish (Lëtzebuergesch)
-- Macedonian (Македонски)
-- Malay (Melayu)
-- Maltese (Malti)
-- Norsk (bokmål)
-- Persian (فارسی)
-- Polish (polski)
-- Portuguese (português)
-- Romanian (română)
-- Russian (русский)
-- Serbian (Cyrillic) (српски)
-- Serbian (Latin) (srpski)
-- Slovak (slovenčina)
-- Spanish (español)
-- Swedish (svenska)
-- Thai (ไทย)
-- Turkish (Türkçe)
-- Ukrainian (українська)
-- Vietnamese (Tiếng Việt)
-- Welsh (Cymraeg)
+## Contributing
+Read `Rules_For_Agent_Editors.md` first. It holds the layout rules and a navigation index.
 
-## Custom languages and themes
-RetroBar supports custom languages and themes. You may install community-made theme files that you have downloaded in RetroBar Properties > Advanced.
-
-You may manually install custom languages or themes by creating a `Languages` or a `Themes` directory in `%localappdata%\RetroBar`, and placing valid `.xaml` language or theme files there.
-
-Themes use the XAML `ResourceDictionary` format. When creating a new theme, [view the included example themes](https://github.com/dremin/RetroBar/tree/master/RetroBar/Themes) to get started.
-
-## Open-Shell Menu users
-
-You may need to adjust some Open-Shell Menu settings for the best compatibility with RetroBar. We recommend the following settings:
-
-- Controls > Windows Key opens > Open-Shell Menu
-- Menu Look > Align start menu to working area
+## License
+Retrostar is a fork of RetroBar by Sam Johnson. See `LICENSE` for the original license and copyright notice.
