@@ -188,4 +188,60 @@
     <!-- Items below are settings, and should always be in English -->
     <FlowDirection x:Key="flow_direction">LeftToRight</FlowDirection>
     <FontFamily x:Key="start_text_xp_font_family">Franklin Gothic</FontFamily>
+
+    <!-- Start menu -->
+    <s:String x:Key="start_menu_tab">Start Menu</s:String>
+    <s:String x:Key="start_menu_heading">Start menu</s:String>
+    <s:String x:Key="use_vista_start_menu">_Use the Windows Vista Start menu</s:String>
+    <s:String x:Key="start_menu_windows_key">Open with the _Windows key</s:String>
+    <s:String x:Key="start_menu_power_button">Power _button action:</s:String>
+    <s:String x:Key="start_menu_left_heading">Programs</s:String>
+    <s:String x:Key="start_menu_recent_count">Number of recent _programs to display:</s:String>
+    <s:String x:Key="start_menu_large_icons">Use _large icons</s:String>
+    <s:String x:Key="start_menu_use_windows_usage">Include programs Windows has recorded as _frequently used</s:String>
+    <s:String x:Key="start_menu_show_search">Show the _search box</s:String>
+    <s:String x:Key="start_menu_search_files">Search files with the local Windows Search _index</s:String>
+    <s:String x:Key="start_menu_clear_recent">_Clear list</s:String>
+    <s:String x:Key="start_menu_right_heading">Right column</s:String>
+    <s:String x:Key="start_menu_user_folder">User folder</s:String>
+    <s:String x:Key="start_menu_glass_note">The Start menu uses Aero glass when "Enable Aero glass effect" is turned on in the Advanced tab.</s:String>
+    <s:String x:Key="start_menu_all_programs">All Programs</s:String>
+    <s:String x:Key="start_menu_back">Back</s:String>
+    <s:String x:Key="start_menu_see_all_results">See all results</s:String>
+    <s:String x:Key="start_menu_search_placeholder">Start Search</s:String>
+    <s:String x:Key="start_menu_programs_heading">Programs</s:String>
+    <s:String x:Key="start_menu_files_heading">Files</s:String>
+    <s:String x:Key="start_menu_no_results">No items match your search.</s:String>
+    <s:String x:Key="start_menu_internet">Internet</s:String>
+    <s:String x:Key="start_menu_email">E-mail</s:String>
+    <s:String x:Key="start_menu_open">Open</s:String>
+    <s:String x:Key="start_menu_run_as_admin">Run as administrator</s:String>
+    <s:String x:Key="start_menu_open_location">Open file location</s:String>
+    <s:String x:Key="start_menu_pin">Pin to Start menu</s:String>
+    <s:String x:Key="start_menu_unpin">Unpin from Start menu</s:String>
+    <s:String x:Key="start_menu_remove_from_list">Remove from this list</s:String>
+    <s:String x:Key="start_menu_documents">Documents</s:String>
+    <s:String x:Key="start_menu_pictures">Pictures</s:String>
+    <s:String x:Key="start_menu_music">Music</s:String>
+    <s:String x:Key="start_menu_downloads">Downloads</s:String>
+    <s:String x:Key="start_menu_search">Search</s:String>
+    <s:String x:Key="start_menu_recent_items">Recent Items</s:String>
+    <s:String x:Key="start_menu_computer">Computer</s:String>
+    <s:String x:Key="start_menu_network">Network</s:String>
+    <s:String x:Key="start_menu_connect_to">Connect To</s:String>
+    <s:String x:Key="start_menu_control_panel">Control Panel</s:String>
+    <s:String x:Key="start_menu_default_programs">Default Programs</s:String>
+    <s:String x:Key="start_menu_run">Run...</s:String>
+    <s:String x:Key="start_menu_switch_user">Switch User</s:String>
+    <s:String x:Key="start_menu_log_off">Log Off</s:String>
+    <s:String x:Key="start_menu_lock">Lock</s:String>
+    <s:String x:Key="start_menu_restart">Restart</s:String>
+    <s:String x:Key="start_menu_sleep">Sleep</s:String>
+    <s:String x:Key="start_menu_hibernate">Hibernate</s:String>
+    <s:String x:Key="start_menu_shut_down">Shut Down</s:String>
+    <x:Array x:Key="start_menu_power_button_values" Type="s:String">
+        <s:String>Sleep</s:String>
+        <s:String>Hibernate</s:String>
+        <s:String>Shut down</s:String>
+    </x:Array>
 </ResourceDictionary>

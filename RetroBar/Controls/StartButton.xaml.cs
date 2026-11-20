@@ -7,6 +7,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using ManagedShell.Common.Helpers;
 using ManagedShell.Interop;
+using RetroBar.StartMenu;
 using RetroBar.Utilities;
 
 namespace RetroBar.Controls
@@ -75,6 +76,15 @@ namespace RetroBar.Controls
 
         private void Start_OnClick(object sender, RoutedEventArgs e)
         {
+            StartMenuManager? vistaStartMenu = StartMenuManager.Instance;
+
+            if (vistaStartMenu != null && vistaStartMenu.IsEnabled && Host != null)
+            {
+                vistaStartMenu.ToggleFromStartButton(Host);
+                Start.IsChecked = vistaStartMenu.IsOpenOn(Host);
+                return;
+            }
+
             if (allowOpenStart)
             {
                 OpenStartMenu();
@@ -86,6 +96,14 @@ namespace RetroBar.Controls
 
         private void OpenStartMenu()
         {
+            StartMenuManager? vistaStartMenu = StartMenuManager.Instance;
+
+            if (vistaStartMenu != null && vistaStartMenu.IsEnabled && Host != null)
+            {
+                vistaStartMenu.Open(Host);
+                return;
+            }
+
             Host?.SetTrayHost();
             Host?.SetStartMenuOpen(true);
             pendingOpenTimer.Start();
@@ -127,6 +145,11 @@ namespace RetroBar.Controls
         {
             StartMenuMonitor.StartMenuVisibilityChanged += AppVisibilityHelper_StartMenuVisibilityChanged;
 
+            if (StartMenuManager.Instance != null)
+            {
+                StartMenuManager.Instance.OpenStateChanged += VistaStartMenu_OpenStateChanged;
+            }
+
             Settings.Instance.PropertyChanged += Settings_PropertyChanged;
 
             dragHandler = new DelayedActivationHandler(() =>
@@ -152,6 +175,11 @@ namespace RetroBar.Controls
         {
             StartMenuMonitor.StartMenuVisibilityChanged -= AppVisibilityHelper_StartMenuVisibilityChanged;
 
+            if (StartMenuManager.Instance != null)
+            {
+                StartMenuManager.Instance.OpenStateChanged -= VistaStartMenu_OpenStateChanged;
+            }
+
             if (Host != null)
             {
                 Host.PropertyChanged -= Taskbar_PropertyChanged;
@@ -173,6 +201,14 @@ namespace RetroBar.Controls
                 return;
             }
             SetStartMenuState(e.Visible);
+        }
+
+        private void VistaStartMenu_OpenStateChanged(object? sender, StartMenuOpenStateEventArgs e)
+        {
+            if (e.Host == Host)
+            {
+                SetStartMenuState(e.IsOpen);
+            }
         }
 
         private void StartButton_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)

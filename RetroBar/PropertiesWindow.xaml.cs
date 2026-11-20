@@ -418,6 +418,19 @@ namespace RetroBar
             }
         }
 
+        private void CboStartMenuPowerButton_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+        {
+            if (cboStartMenuPowerButton.SelectedItem == null && cboStartMenuPowerButton.Items.Count > (int)Settings.Instance.StartMenuPowerButtonAction)
+            {
+                cboStartMenuPowerButton.SelectedValue = cboStartMenuPowerButton.Items[(int)Settings.Instance.StartMenuPowerButtonAction];
+            }
+        }
+
+        private void ClearStartMenuRecent_OnClick(object sender, RoutedEventArgs e)
+        {
+            RetroBar.StartMenu.StartMenuManager.Instance?.ClearRecentPrograms();
+        }
+
         private void CboClockAction_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
             if (cboClockAction.SelectedItem == null)

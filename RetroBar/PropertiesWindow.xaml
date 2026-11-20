@@ -4,6 +4,7 @@
         xmlns:controls="clr-namespace:RetroBar.Controls"
         xmlns:converters="clr-namespace:RetroBar.Converters"
         xmlns:Settings="clr-namespace:RetroBar.Utilities"
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
         Title="{DynamicResource retrobar_properties}"
         Icon="Resources/retrobar.ico"
         Height="Auto"
@@ -519,6 +520,7 @@
                                 <Label Content="{DynamicResource allow_blur_behind}" />
                             </CheckBox>
                             <CheckBox x:Name="cbAllowAlternateMaximizedAppearance"
+                                      IsEnabled="{Binding Source={x:Static Settings:Settings.Instance}, Path=EnableAeroGlass, UpdateSourceTrigger=PropertyChanged, Converter={StaticResource boolToInvertedBoolConverter}}"
                                       IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=AllowAlternateMaximizedAppearance, UpdateSourceTrigger=PropertyChanged}">
                                 <Label Content="{DynamicResource allow_alternate_maximized_appearance}" />
                             </CheckBox>
@@ -618,6 +620,162 @@
                             </Hyperlink.Inlines>
                         </Hyperlink>
                     </TextBlock>
+                    <StackPanel></StackPanel>
+                </DockPanel>
+            </TabItem>
+            <TabItem Header="{DynamicResource start_menu_tab}">
+                <DockPanel Margin="10"
+                           MinHeight="{Binding ElementName=FirstTabContent, Path=ActualHeight}">
+                    <DockPanel.Resources>
+                        <x:Array x:Key="startMenuRecentCounts" Type="sys:Int32">
+                            <sys:Int32>0</sys:Int32>
+                            <sys:Int32>1</sys:Int32>
+                            <sys:Int32>2</sys:Int32>
+                            <sys:Int32>3</sys:Int32>
+                            <sys:Int32>4</sys:Int32>
+                            <sys:Int32>5</sys:Int32>
+                            <sys:Int32>6</sys:Int32>
+                            <sys:Int32>7</sys:Int32>
+                            <sys:Int32>8</sys:Int32>
+                            <sys:Int32>9</sys:Int32>
+                            <sys:Int32>10</sys:Int32>
+                            <sys:Int32>11</sys:Int32>
+                            <sys:Int32>12</sys:Int32>
+                            <sys:Int32>13</sys:Int32>
+                            <sys:Int32>14</sys:Int32>
+                            <sys:Int32>15</sys:Int32>
+                            <sys:Int32>16</sys:Int32>
+                            <sys:Int32>17</sys:Int32>
+                            <sys:Int32>18</sys:Int32>
+                            <sys:Int32>19</sys:Int32>
+                            <sys:Int32>20</sys:Int32>
+                        </x:Array>
+                    </DockPanel.Resources>
+                    <GroupBox Header="{DynamicResource start_menu_heading}" DockPanel.Dock="Top">
+                        <StackPanel Orientation="Vertical">
+                            <CheckBox x:Name="cbUseVistaStartMenu"
+                                      IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=UseVistaStartMenu, UpdateSourceTrigger=PropertyChanged}">
+                                <Label Content="{DynamicResource use_vista_start_menu}" />
+                            </CheckBox>
+                            <CheckBox x:Name="cbStartMenuWindowsKey"
+                                      IsEnabled="{Binding Source={x:Static Settings:Settings.Instance}, Path=UseVistaStartMenu, UpdateSourceTrigger=PropertyChanged}"
+                                      IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuOpenWithWindowsKey, UpdateSourceTrigger=PropertyChanged}">
+                                <Label Content="{DynamicResource start_menu_windows_key}" />
+                            </CheckBox>
+                            <DockPanel IsEnabled="{Binding Source={x:Static Settings:Settings.Instance}, Path=UseVistaStartMenu, UpdateSourceTrigger=PropertyChanged}">
+                                <Label VerticalAlignment="Center"
+                                       Target="{Binding ElementName=cboStartMenuPowerButton}">
+                                    <AccessText Text="{DynamicResource start_menu_power_button}" />
+                                </Label>
+                                <ComboBox x:Name="cboStartMenuPowerButton"
+                                          ItemsSource="{DynamicResource start_menu_power_button_values}"
+                                          SelectedIndex="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuPowerButtonAction, UpdateSourceTrigger=PropertyChanged, Converter={StaticResource enumConverter}}"
+                                          SelectionChanged="CboStartMenuPowerButton_SelectionChanged" />
+                            </DockPanel>
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="{DynamicResource start_menu_left_heading}"
+                              DockPanel.Dock="Top"
+                              IsEnabled="{Binding Source={x:Static Settings:Settings.Instance}, Path=UseVistaStartMenu, UpdateSourceTrigger=PropertyChanged}">
+                        <StackPanel Orientation="Vertical">
+                            <DockPanel>
+                                <Label VerticalAlignment="Center"
+                                       Target="{Binding ElementName=cboStartMenuRecentCount}">
+                                    <AccessText Text="{DynamicResource start_menu_recent_count}" />
+                                </Label>
+                                <ComboBox x:Name="cboStartMenuRecentCount"
+                                          Width="60"
+                                          ItemsSource="{StaticResource startMenuRecentCounts}"
+                                          SelectedItem="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuRecentCount, UpdateSourceTrigger=PropertyChanged}" />
+                            </DockPanel>
+                            <CheckBox x:Name="cbStartMenuLargeIcons"
+                                      IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuLargeIcons, UpdateSourceTrigger=PropertyChanged}">
+                                <Label Content="{DynamicResource start_menu_large_icons}" />
+                            </CheckBox>
+                            <CheckBox x:Name="cbStartMenuWindowsUsage"
+                                      IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuUseWindowsUsage, UpdateSourceTrigger=PropertyChanged}">
+                                <Label Content="{DynamicResource start_menu_use_windows_usage}" />
+                            </CheckBox>
+                            <CheckBox x:Name="cbStartMenuShowSearch"
+                                      IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowSearch, UpdateSourceTrigger=PropertyChanged}">
+                                <Label Content="{DynamicResource start_menu_show_search}" />
+                            </CheckBox>
+                            <CheckBox x:Name="cbStartMenuSearchFiles"
+                                      IsEnabled="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowSearch, UpdateSourceTrigger=PropertyChanged}"
+                                      IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuSearchFiles, UpdateSourceTrigger=PropertyChanged}">
+                                <Label Content="{DynamicResource start_menu_search_files}" />
+                            </CheckBox>
+                            <Button Content="{DynamicResource start_menu_clear_recent}"
+                                    HorizontalAlignment="Left"
+                                    Margin="0,5,0,5"
+                                    Click="ClearStartMenuRecent_OnClick" />
+                        </StackPanel>
+                    </GroupBox>
+                    <GroupBox Header="{DynamicResource start_menu_right_heading}"
+                              DockPanel.Dock="Top"
+                              IsEnabled="{Binding Source={x:Static Settings:Settings.Instance}, Path=UseVistaStartMenu, UpdateSourceTrigger=PropertyChanged}">
+                        <UniformGrid Columns="2">
+                                <CheckBox x:Name="cbStartMenuUserFolder"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowUserFolder, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_user_folder}" />
+                                </CheckBox>
+                                <CheckBox x:Name="cbStartMenuDocuments"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowDocuments, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_documents}" />
+                                </CheckBox>
+                                <CheckBox x:Name="cbStartMenuPictures"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowPictures, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_pictures}" />
+                                </CheckBox>
+                                <CheckBox x:Name="cbStartMenuMusic"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowMusic, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_music}" />
+                                </CheckBox>
+                                <CheckBox x:Name="cbStartMenuDownloads"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowDownloads, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_downloads}" />
+                                </CheckBox>
+                                <CheckBox x:Name="cbStartMenuSearchLink"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowSearchLink, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_search}" />
+                                </CheckBox>
+                                <CheckBox x:Name="cbStartMenuRecentItems"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowRecentItems, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_recent_items}" />
+                                </CheckBox>
+                                <CheckBox x:Name="cbStartMenuComputer"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowComputer, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_computer}" />
+                                </CheckBox>
+                                <CheckBox x:Name="cbStartMenuNetwork"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowNetwork, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_network}" />
+                                </CheckBox>
+                                <CheckBox x:Name="cbStartMenuConnectTo"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowConnectTo, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_connect_to}" />
+                                </CheckBox>
+                                <CheckBox x:Name="cbStartMenuControlPanel"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowControlPanel, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_control_panel}" />
+                                </CheckBox>
+                                <CheckBox x:Name="cbStartMenuDefaultPrograms"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowDefaultPrograms, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_default_programs}" />
+                                </CheckBox>
+                                <CheckBox x:Name="cbStartMenuRun"
+                                          IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuShowRun, UpdateSourceTrigger=PropertyChanged}">
+                                    <Label Content="{DynamicResource start_menu_run}" />
+                                </CheckBox>
+                        </UniformGrid>
+                    </GroupBox>
+                    <TextBlock DockPanel.Dock="Top"
+                               Margin="0,8,0,0"
+                               MaxWidth="360"
+                               HorizontalAlignment="Left"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}"
+                               Text="{DynamicResource start_menu_glass_note}" />
                     <StackPanel></StackPanel>
                 </DockPanel>
             </TabItem>

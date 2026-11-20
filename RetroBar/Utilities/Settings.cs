@@ -1,6 +1,7 @@
 using ManagedShell.AppBar;
 using ManagedShell.Common.Helpers;
 using ManagedShell.WindowsTray;
+using RetroBar.StartMenu;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -482,6 +483,179 @@ namespace RetroBar.Utilities
             set => SetEnum(ref _winNumHotkeysAction, value);
         }
 
+        #region Start menu
+
+        private bool _useVistaStartMenu = true;
+        public bool UseVistaStartMenu
+        {
+            get => _useVistaStartMenu;
+            set => Set(ref _useVistaStartMenu, value);
+        }
+
+        private bool _startMenuOpenWithWindowsKey = true;
+        public bool StartMenuOpenWithWindowsKey
+        {
+            get => _startMenuOpenWithWindowsKey;
+            set => Set(ref _startMenuOpenWithWindowsKey, value);
+        }
+
+        private int _startMenuRecentCount = 9;
+        public int StartMenuRecentCount
+        {
+            get => _startMenuRecentCount;
+            set => Set(ref _startMenuRecentCount, Math.Clamp(value, 0, 20));
+        }
+
+        private bool _startMenuLargeIcons = true;
+        public bool StartMenuLargeIcons
+        {
+            get => _startMenuLargeIcons;
+            set => Set(ref _startMenuLargeIcons, value);
+        }
+
+        private bool _startMenuShowSearch = true;
+        public bool StartMenuShowSearch
+        {
+            get => _startMenuShowSearch;
+            set => Set(ref _startMenuShowSearch, value);
+        }
+
+        private bool _startMenuSearchFiles = true;
+        public bool StartMenuSearchFiles
+        {
+            get => _startMenuSearchFiles;
+            set => Set(ref _startMenuSearchFiles, value);
+        }
+
+        private bool _startMenuUseWindowsUsage = true;
+        public bool StartMenuUseWindowsUsage
+        {
+            get => _startMenuUseWindowsUsage;
+            set => Set(ref _startMenuUseWindowsUsage, value);
+        }
+
+        private StartMenuPowerAction _startMenuPowerButtonAction = StartMenuPowerAction.Sleep;
+        public StartMenuPowerAction StartMenuPowerButtonAction
+        {
+            get => _startMenuPowerButtonAction;
+            set => SetEnum(ref _startMenuPowerButtonAction, value);
+        }
+
+        private List<string> _startMenuPinnedPrograms = new List<string> { StartMenuLauncher.DefaultBrowserKey, StartMenuLauncher.DefaultEmailKey };
+        public List<string> StartMenuPinnedPrograms
+        {
+            get => _startMenuPinnedPrograms;
+            set => Set(ref _startMenuPinnedPrograms, value);
+        }
+
+        private List<string> _startMenuRecentPrograms = new List<string>();
+        public List<string> StartMenuRecentPrograms
+        {
+            get => _startMenuRecentPrograms;
+            set => Set(ref _startMenuRecentPrograms, value);
+        }
+
+        private List<string> _startMenuHiddenPrograms = new List<string>();
+        /// <summary>Programs removed from the recent list with "Remove from this list".</summary>
+        public List<string> StartMenuHiddenPrograms
+        {
+            get => _startMenuHiddenPrograms;
+            set => Set(ref _startMenuHiddenPrograms, value);
+        }
+
+        private bool _startMenuShowUserFolder = true;
+        public bool StartMenuShowUserFolder
+        {
+            get => _startMenuShowUserFolder;
+            set => Set(ref _startMenuShowUserFolder, value);
+        }
+
+        private bool _startMenuShowDocuments = true;
+        public bool StartMenuShowDocuments
+        {
+            get => _startMenuShowDocuments;
+            set => Set(ref _startMenuShowDocuments, value);
+        }
+
+        private bool _startMenuShowPictures = true;
+        public bool StartMenuShowPictures
+        {
+            get => _startMenuShowPictures;
+            set => Set(ref _startMenuShowPictures, value);
+        }
+
+        private bool _startMenuShowMusic = true;
+        public bool StartMenuShowMusic
+        {
+            get => _startMenuShowMusic;
+            set => Set(ref _startMenuShowMusic, value);
+        }
+
+        private bool _startMenuShowDownloads = false;
+        public bool StartMenuShowDownloads
+        {
+            get => _startMenuShowDownloads;
+            set => Set(ref _startMenuShowDownloads, value);
+        }
+
+        private bool _startMenuShowSearchLink = true;
+        public bool StartMenuShowSearchLink
+        {
+            get => _startMenuShowSearchLink;
+            set => Set(ref _startMenuShowSearchLink, value);
+        }
+
+        private bool _startMenuShowRecentItems = true;
+        public bool StartMenuShowRecentItems
+        {
+            get => _startMenuShowRecentItems;
+            set => Set(ref _startMenuShowRecentItems, value);
+        }
+
+        private bool _startMenuShowComputer = true;
+        public bool StartMenuShowComputer
+        {
+            get => _startMenuShowComputer;
+            set => Set(ref _startMenuShowComputer, value);
+        }
+
+        private bool _startMenuShowNetwork = true;
+        public bool StartMenuShowNetwork
+        {
+            get => _startMenuShowNetwork;
+            set => Set(ref _startMenuShowNetwork, value);
+        }
+
+        private bool _startMenuShowConnectTo = true;
+        public bool StartMenuShowConnectTo
+        {
+            get => _startMenuShowConnectTo;
+            set => Set(ref _startMenuShowConnectTo, value);
+        }
+
+        private bool _startMenuShowControlPanel = true;
+        public bool StartMenuShowControlPanel
+        {
+            get => _startMenuShowControlPanel;
+            set => Set(ref _startMenuShowControlPanel, value);
+        }
+
+        private bool _startMenuShowDefaultPrograms = true;
+        public bool StartMenuShowDefaultPrograms
+        {
+            get => _startMenuShowDefaultPrograms;
+            set => Set(ref _startMenuShowDefaultPrograms, value);
+        }
+
+        private bool _startMenuShowRun = false;
+        public bool StartMenuShowRun
+        {
+            get => _startMenuShowRun;
+            set => Set(ref _startMenuShowRun, value);
+        }
+
+        #endregion
+
         private bool _enableAeroGlass = true;
         public bool EnableAeroGlass
         {
@@ -496,7 +670,7 @@ namespace RetroBar.Utilities
             set => Set(ref _allowBlurBehind, value);
         }
         
-        private bool _allowAlternateMaximizedAppearance = true;
+        private bool _allowAlternateMaximizedAppearance = false;
         public bool AllowAlternateMaximizedAppearance
         {
           get => _allowAlternateMaximizedAppearance;

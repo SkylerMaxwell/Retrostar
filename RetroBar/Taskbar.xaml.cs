@@ -281,6 +281,7 @@ namespace RetroBar
             {
                 IsAeroGlassEnabled = Settings.Instance.EnableAeroGlass;
                 UpdateBlur();
+                UpdateMaximizedWindowTimer();
             }
             else if (e.PropertyName == nameof(Settings.AllowAlternateMaximizedAppearance))
             {
@@ -303,6 +304,13 @@ namespace RetroBar
 
         private bool AlternatesAppearanceWhenMaximized()
         {
+            // While Aero glass is on, glass themes keep their glass when a window is maximized
+            if (Settings.Instance.EnableAeroGlass &&
+                (Application.Current.FindResource("AllowsTransparency") as bool? ?? false))
+            {
+                return false;
+            }
+
             return Settings.Instance.AllowAlternateMaximizedAppearance &&
                    Application.Current.TryFindResource("AlternatesAppearanceWhenMaximized") is bool b && b;
         }

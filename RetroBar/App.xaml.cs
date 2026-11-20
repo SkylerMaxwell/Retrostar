@@ -12,6 +12,7 @@ using System.Diagnostics;
 using System.Reflection;
 using ManagedShell.Common.Logging;
 using System.Linq;
+using RetroBar.StartMenu;
 
 namespace RetroBar
 {
@@ -23,6 +24,7 @@ namespace RetroBar
         private bool _errorVisible;
         private ManagedShellLogger _logger;
         private WindowManager _windowManager;
+        private StartMenuManager _startMenuManager;
 
         private readonly DictionaryManager _dictionaryManager;
         private readonly ExplorerMonitor _explorerMonitor;
@@ -59,8 +61,13 @@ namespace RetroBar
 
             _dictionaryManager.SetLanguageFromSettings();
             loadTheme();
+
+            // Created before the taskbars so their Start buttons can subscribe to it as they load
+            _startMenuManager = new StartMenuManager();
+
             _windowManager = new WindowManager(_dictionaryManager, _explorerMonitor, _shellManager, _startMenuMonitor, _updater, _hotkeyManager);
             _startMenuMonitor.SetWindowManager(_windowManager);
+            _startMenuManager.SetWindowManager(_windowManager);
         }
 
         private void App_OnExit(object sender, ExitEventArgs e)
@@ -141,6 +148,7 @@ namespace RetroBar
             Settings.Instance.PropertyChanged -= Settings_PropertyChanged;
 
             _explorerMonitor.Dispose();
+            _startMenuManager?.Dispose();
             _windowManager.Dispose();
             _dictionaryManager.Dispose();
             _shellManager.Dispose();
