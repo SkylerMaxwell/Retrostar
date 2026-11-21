@@ -45,6 +45,13 @@ namespace RetroBar
                 return 0;
             }
 
+            if (args.Length == 2 && args[0] == RetroBar.Utilities.VistaIconScheme.RestoreArgument && int.TryParse(args[1], out int iconOwnerPid))
+            {
+                // The Vista icons watchdog: no window, no instance check, only the restore of the Windows icons
+                RetroBar.Utilities.VistaIconScheme.RunWatchdog(iconOwnerPid);
+                return 0;
+            }
+
             if (!SingleInstanceCheck())
             {
                 return 1;
@@ -993,6 +1000,17 @@ namespace RetroBar.Utilities
         {
             get => _aeroGlassBlur;
             set => Set(ref _aeroGlassBlur, Math.Clamp(value, 0, 100));
+        }
+
+        private bool _useVistaIcons = true;
+        /// <summary>
+        /// Shows Windows Vista's icons (Vista's imageres.dll) in place of Windows' default icons while Retrostar runs;
+        /// Windows' own return when it closes (VistaIconScheme).
+        /// </summary>
+        public bool UseVistaIcons
+        {
+            get => _useVistaIcons;
+            set => Set(ref _useVistaIcons, value);
         }
 
         private bool _useVistaSounds = true;
@@ -3012,6 +3030,609 @@ namespace RetroBar.Utilities
     }
 }
 // <RETROSTAR_SOURCE_END path="RetroBar/Utilities/VistaSoundScheme.cs">
+
+// <RETROSTAR_SOURCE_BEGIN path="RetroBar/Utilities/VistaIconScheme.cs">
+namespace RetroBar.Utilities
+{
+    using ManagedShell.Common.Logging;
+    using Microsoft.Win32;
+    using System;
+    using System.Collections.Generic;
+    using System.Diagnostics;
+    using System.IO;
+    using System.Runtime.InteropServices;
+    using System.Text.Json;
+    using System.Text.RegularExpressions;
+    using System.Threading;
+
+    /// <summary>
+    /// Windows Vista's icons, for as long as Retrostar runs.
+    ///
+    /// Windows takes most of its default icons (file types, This PC, Recycle Bin, Network, Control Panel, user folders,
+    /// drives) from its own imageres.dll, named in the registry as a DefaultIcon of the form "imageres.dll,-ID". Vista's
+    /// imageres.dll (Resources\VistaIcons\vista-imageres.dll) uses the same resource IDs for the same pictures. Apply
+    /// finds every DefaultIcon that names Windows' imageres.dll with an ID Vista's file also has, and overrides it for the
+    /// current user (HKCU\Software\Classes\...\DefaultIcon) with Vista's file and the same ID. Windows merges per-user
+    /// and machine-wide classes value by value, so only the icon changes: names, commands and associations are
+    /// untouched. Nothing is written to the machine-wide registry and no Windows file is changed. Windows is then told
+    /// its icons changed (SHChangeNotify), so Explorer redraws them without a restart; Restore does the same.
+    ///
+    /// The original per-user entries are written to a backup file before anything is changed, and the backup names the
+    /// process that owns it. Restore puts back only entries that still hold Retrostar's value, so an icon the user
+    /// changed meanwhile is kept. A watchdog process (this executable started with RestoreArgument) waits for the owner
+    /// and restores if it ends without restoring; the next Apply also restores what a lost session left. A named mutex
+    /// orders all of these.
+    ///
+    /// Not covered, because Windows has no per-user override for them: icons Windows draws from its stock icons alone,
+    /// such as the plain folder icon on most Windows 11 builds (HKLM "Shell Icons", which needs administrator rights).
+    /// </summary>
+    internal sealed class VistaIconScheme : IDisposable
+    {
+        public const string RestoreArgument = "--restore-vista-icons";
+
+        private const string ClassesRoot = @"Software\Classes";
+        private const string LockName = "RetroBar.VistaIcons";
+        private const string BackupFileName = "vista-icons-backup.json";
+        private const string IconFileName = "vista-imageres.dll";
+
+        // A DefaultIcon naming Windows' imageres.dll by resource ID: "%SystemRoot%\System32\imageres.dll,-109"
+        private static readonly Regex ImageresReference = new Regex(
+            @"^\s*""?(?<path>[^"",]*imageres\.dll)""?\s*,\s*-(?<id>\d+)\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        /// <summary>One per-user value as it was before Apply, and what Apply wrote.</summary>
+        internal sealed class Entry
+        {
+            /// <summary>The DefaultIcon key, relative to HKCU\Software\Classes.</summary>
+            public string Key { get; set; }
+            public string Value { get; set; }
+            /// <summary>Keys Apply created, outermost first, relative to HKCU\Software\Classes.</summary>
+            public List<string> CreatedKeys { get; set; } = new List<string>();
+            public bool HadValue { get; set; }
+            public string Kind { get; set; }
+            public string Data { get; set; }
+            public string Applied { get; set; }
+        }
+
+        internal sealed class Backup
+        {
+            public int OwnerPid { get; set; }
+            public List<Entry> Entries { get; set; } = new List<Entry>();
+        }
+
+        private const uint SHCNE_ASSOCCHANGED = 0x08000000;
+        private const uint SHCNF_FLUSH = 0x1000;
+        private const uint LOAD_LIBRARY_AS_DATAFILE = 0x00000002;
+        private const uint LOAD_LIBRARY_AS_IMAGE_RESOURCE = 0x00000020;
+        private static readonly IntPtr RT_GROUP_ICON = (IntPtr)14;
+
+        private delegate bool EnumResNameProc(IntPtr module, IntPtr type, IntPtr name, IntPtr param);
+
+        [DllImport("shell32.dll")]
+        private static extern void SHChangeNotify(uint eventId, uint flags, IntPtr item1, IntPtr item2);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr LoadLibraryEx(string fileName, IntPtr reserved, uint flags);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool FreeLibrary(IntPtr module);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern bool EnumResourceNames(IntPtr module, IntPtr type, EnumResNameProc callback, IntPtr param);
+
+        private bool _applied;
+
+        public void Apply()
+        {
+            if (_applied)
+            {
+                return;
+            }
+
+            try
+            {
+                string iconFile = FindIconFile();
+                if (iconFile == null)
+                {
+                    ShellLogger.Error($"VistaIconScheme: Resources\\VistaIcons\\{IconFileName} was not found");
+                    return;
+                }
+
+                HashSet<int> vistaIds = ReadIconIds(iconFile);
+                if (vistaIds.Count == 0)
+                {
+                    ShellLogger.Error("VistaIconScheme: no icons could be read from Vista's imageres.dll");
+                    return;
+                }
+
+                using (new IconLock())
+                {
+                    // Whatever a lost session left behind is restored first, so that the backup holds the real originals
+                    RestoreLocked(null);
+
+                    var backup = new Backup { OwnerPid = Environment.ProcessId };
+
+                    foreach (var (key, value, id) in FindOverrides(vistaIds))
+                    {
+                        Entry entry = Capture(key, value);
+                        entry.Applied = $"{iconFile},-{id}";
+                        backup.Entries.Add(entry);
+                    }
+
+                    if (backup.Entries.Count == 0)
+                    {
+                        return;
+                    }
+
+                    // The originals are safe on disk before the first change
+                    WriteBackup(backup);
+                    _applied = true;
+
+                    foreach (Entry entry in backup.Entries)
+                    {
+                        try
+                        {
+                            using (RegistryKey key = Registry.CurrentUser.CreateSubKey($@"{ClassesRoot}\{entry.Key}"))
+                            {
+                                key.SetValue(entry.Value, entry.Applied, RegistryValueKind.String);
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            ShellLogger.Error($"VistaIconScheme: could not set {entry.Key}: {e.Message}");
+                        }
+                    }
+
+                    ShellLogger.Info($"VistaIconScheme: {backup.Entries.Count} default icons now come from Vista's imageres.dll");
+                }
+
+                RefreshIcons();
+                StartWatchdog();
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaIconScheme: could not apply the Vista icons: {e.Message}");
+            }
+        }
+
+        /// <summary>Puts every icon back as it was. Does nothing when the icons are not applied.</summary>
+        public void Restore()
+        {
+            if (!_applied)
+            {
+                return;
+            }
+
+            try
+            {
+                using (new IconLock())
+                {
+                    RestoreLocked(Environment.ProcessId);
+                }
+
+                RefreshIcons();
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaIconScheme: could not restore the Windows icons: {e.Message}");
+            }
+
+            _applied = false;
+        }
+
+        public void Dispose()
+        {
+            Restore();
+        }
+
+        /// <summary>
+        /// Entry point of the watchdog process: waits for the process that owns the backup, then restores if it did not.
+        /// Runs before any window or setting exists.
+        /// </summary>
+        public static void RunWatchdog(int ownerPid)
+        {
+            try
+            {
+                using (Process owner = Process.GetProcessById(ownerPid))
+                {
+                    owner.WaitForExit();
+                }
+            }
+            catch (ArgumentException)
+            {
+                // The owner has already ended
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaIconScheme: watchdog could not wait for {ownerPid}: {e.Message}");
+            }
+
+            try
+            {
+                bool restored;
+
+                using (new IconLock())
+                {
+                    // Only the backup this owner made: a newer Retrostar may have made its own since
+                    restored = RestoreLocked(ownerPid);
+                }
+
+                if (restored)
+                {
+                    RefreshIcons();
+                }
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaIconScheme: watchdog could not restore: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Every DefaultIcon value Windows resolves to its own imageres.dll with an ID Vista's file also has: the value's
+        /// key relative to the classes root, its name and the ID. File types (ProgIDs) and shell objects (CLSID) are
+        /// read; extensions ("." keys) are left alone, so nothing near the default-app associations is touched.
+        /// </summary>
+        private static List<(string key, string value, int id)> FindOverrides(HashSet<int> vistaIds)
+        {
+            var found = new List<(string, string, int)>();
+
+            using (RegistryKey root = Registry.ClassesRoot)
+            {
+                foreach (string name in root.GetSubKeyNames())
+                {
+                    if (name.StartsWith(".") || name.Equals("CLSID", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    AddOverrides(root, $@"{name}\DefaultIcon", vistaIds, found);
+                }
+
+                using (RegistryKey clsid = root.OpenSubKey("CLSID"))
+                {
+                    if (clsid != null)
+                    {
+                        foreach (string name in clsid.GetSubKeyNames())
+                        {
+                            AddOverrides(root, $@"CLSID\{name}\DefaultIcon", vistaIds, found);
+                        }
+                    }
+                }
+            }
+
+            return found;
+        }
+
+        private static void AddOverrides(RegistryKey root, string path, HashSet<int> vistaIds, List<(string, string, int)> found)
+        {
+            try
+            {
+                using (RegistryKey icon = root.OpenSubKey(path))
+                {
+                    if (icon == null)
+                    {
+                        return;
+                    }
+
+                    // The default value, and the Recycle Bin's "Empty" and "Full"
+                    foreach (string value in icon.GetValueNames())
+                    {
+                        if (!(icon.GetValue(value, null, RegistryValueOptions.DoNotExpandEnvironmentNames) is string data))
+                        {
+                            continue;
+                        }
+
+                        Match match = ImageresReference.Match(data);
+
+                        if (match.Success && IsWindowsImageres(match.Groups["path"].Value)
+                            && int.TryParse(match.Groups["id"].Value, out int id) && vistaIds.Contains(id))
+                        {
+                            found.Add((path, value, id));
+                        }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // A key this user may not read is left as it is
+            }
+        }
+
+        private static bool IsWindowsImageres(string path)
+        {
+            string expanded = Environment.ExpandEnvironmentVariables(path.Trim());
+
+            if (expanded.Equals("imageres.dll", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            try
+            {
+                return string.Equals(Path.GetFullPath(expanded), Path.Combine(Environment.SystemDirectory, "imageres.dll"), StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private static Entry Capture(string key, string value)
+        {
+            var entry = new Entry { Key = key, Value = value };
+
+            // Keys this user does not have yet, outermost first: Restore removes them again if they are left empty
+            string[] parts = key.Split('\\');
+            string path = ClassesRoot;
+            bool missing = false;
+
+            foreach (string part in parts)
+            {
+                path += @"\" + part;
+
+                if (!missing)
+                {
+                    using (RegistryKey existing = Registry.CurrentUser.OpenSubKey(path))
+                    {
+                        missing = existing == null;
+                    }
+                }
+
+                if (missing)
+                {
+                    entry.CreatedKeys.Add(path.Substring(ClassesRoot.Length + 1));
+                }
+            }
+
+            using (RegistryKey current = Registry.CurrentUser.OpenSubKey($@"{ClassesRoot}\{key}"))
+            {
+                if (current != null && Array.IndexOf(current.GetValueNames(), value) >= 0)
+                {
+                    entry.HadValue = true;
+                    entry.Kind = current.GetValueKind(value).ToString();
+                    entry.Data = current.GetValue(value, null, RegistryValueOptions.DoNotExpandEnvironmentNames)?.ToString() ?? "";
+                }
+            }
+
+            return entry;
+        }
+
+        /// <summary>Restores the backup if there is one (and, given an owner, only that owner's). Returns whether it did.</summary>
+        private static bool RestoreLocked(int? requiredOwner)
+        {
+            Backup backup = ReadBackup();
+
+            if (backup == null || (requiredOwner.HasValue && backup.OwnerPid != requiredOwner.Value))
+            {
+                return false;
+            }
+
+            foreach (Entry entry in backup.Entries)
+            {
+                try
+                {
+                    string keyPath = $@"{ClassesRoot}\{entry.Key}";
+
+                    using (RegistryKey key = Registry.CurrentUser.OpenSubKey(keyPath, true))
+                    {
+                        if (key == null)
+                        {
+                            continue;
+                        }
+
+                        // An icon changed since Apply is the user's: keep it
+                        string current = key.GetValue(entry.Value, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
+                        if (!string.Equals(current, entry.Applied, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        if (entry.HadValue)
+                        {
+                            key.SetValue(entry.Value, entry.Data ?? "", Enum.TryParse(entry.Kind, out RegistryValueKind kind) ? kind : RegistryValueKind.String);
+                        }
+                        else
+                        {
+                            key.DeleteValue(entry.Value, false);
+                        }
+                    }
+
+                    // Keys Apply created go again, innermost first, if nothing else has been put in them
+                    for (int i = entry.CreatedKeys.Count - 1; i >= 0; i--)
+                    {
+                        string created = $@"{ClassesRoot}\{entry.CreatedKeys[i]}";
+                        bool empty;
+
+                        using (RegistryKey key = Registry.CurrentUser.OpenSubKey(created))
+                        {
+                            empty = key != null && key.SubKeyCount == 0 && key.ValueCount == 0;
+                        }
+
+                        if (!empty)
+                        {
+                            break;
+                        }
+
+                        Registry.CurrentUser.DeleteSubKey(created, false);
+                    }
+                }
+                catch (Exception e)
+                {
+                    ShellLogger.Error($"VistaIconScheme: could not restore {entry.Key}: {e.Message}");
+                }
+            }
+
+            try
+            {
+                File.Delete(BackupPath());
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaIconScheme: could not delete the backup: {e.Message}");
+            }
+
+            return true;
+        }
+
+        /// <summary>Tells Windows its icons changed, so Explorer and every open window redraw them now.</summary>
+        private static void RefreshIcons()
+        {
+            try
+            {
+                SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_FLUSH, IntPtr.Zero, IntPtr.Zero);
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaIconScheme: could not refresh the icons: {e.Message}");
+            }
+        }
+
+        /// <summary>The icon IDs in Vista's imageres.dll, read as data: nothing in the file is ever run.</summary>
+        private static HashSet<int> ReadIconIds(string iconFile)
+        {
+            var ids = new HashSet<int>();
+            IntPtr module = LoadLibraryEx(iconFile, IntPtr.Zero, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+
+            if (module == IntPtr.Zero)
+            {
+                ShellLogger.Error($"VistaIconScheme: {iconFile} could not be opened ({Marshal.GetLastWin32Error()})");
+                return ids;
+            }
+
+            try
+            {
+                EnumResNameProc callback = (handle, type, name, param) =>
+                {
+                    // Numbered icons only; IS_INTRESOURCE
+                    long value = name.ToInt64();
+                    if (value > 0 && value <= 0xFFFF)
+                    {
+                        ids.Add((int)value);
+                    }
+                    return true;
+                };
+
+                EnumResourceNames(module, RT_GROUP_ICON, callback, IntPtr.Zero);
+                GC.KeepAlive(callback);
+            }
+            finally
+            {
+                FreeLibrary(module);
+            }
+
+            return ids;
+        }
+
+        private static string FindIconFile()
+        {
+            string[] candidates =
+            {
+                Path.Combine(AppContext.BaseDirectory, "Resources", "VistaIcons", IconFileName),
+                Path.Combine(Path.GetDirectoryName(ExePath.GetExecutablePath()) ?? "", "Resources", "VistaIcons", IconFileName)
+            };
+
+            foreach (string candidate in candidates)
+            {
+                if (File.Exists(candidate))
+                {
+                    return Path.GetFullPath(candidate);
+                }
+            }
+
+            return null;
+        }
+
+        private static string BackupPath()
+        {
+            return BackupFileName.InLocalAppData();
+        }
+
+        private static Backup ReadBackup()
+        {
+            string path = BackupPath();
+
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonSerializer.Deserialize<Backup>(File.ReadAllText(path));
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaIconScheme: the backup could not be read: {e.Message}");
+                return null;
+            }
+        }
+
+        private static void WriteBackup(Backup backup)
+        {
+            string path = BackupPath();
+            string temporary = path + ".tmp";
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllText(temporary, JsonSerializer.Serialize(backup, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(temporary, path, true);
+        }
+
+        /// <summary>
+        /// Starts the watchdog so that it is not a child of this process: it is started through cmd, which ends at once,
+        /// so ending this process's tree does not take it too.
+        /// </summary>
+        private static void StartWatchdog()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c start \"\" /b \"{ExePath.GetExecutablePath()}\" {RestoreArgument} {Environment.ProcessId}",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                })?.Dispose();
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaIconScheme: could not start the watchdog: {e.Message}");
+            }
+        }
+
+        /// <summary>Orders Apply, Restore and the watchdog across processes.</summary>
+        private sealed class IconLock : IDisposable
+        {
+            private readonly Mutex _mutex = new Mutex(false, LockName);
+            private bool _held;
+
+            public IconLock()
+            {
+                try
+                {
+                    _held = _mutex.WaitOne(TimeSpan.FromSeconds(10));
+                }
+                catch (AbandonedMutexException)
+                {
+                    // The holder ended without releasing it; the lock is ours
+                    _held = true;
+                }
+            }
+
+            public void Dispose()
+            {
+                if (_held)
+                {
+                    _mutex.ReleaseMutex();
+                }
+
+                _mutex.Dispose();
+            }
+        }
+    }
+}
+// <RETROSTAR_SOURCE_END path="RetroBar/Utilities/VistaIconScheme.cs">
 
 // [1400] INPUT :: hotkeys, tray hotkeys, low-level mouse hook, delayed activation
 

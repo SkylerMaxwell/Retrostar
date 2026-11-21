@@ -99,6 +99,7 @@
     <s:String x:Key="enable_aero_glass">Enable Aero _glass effect</s:String>
     <s:String x:Key="aero_glass_transparency">Aero glass _transparency:</s:String>
     <s:String x:Key="start_menu_scale">Start menu _scale:</s:String>
+    <s:String x:Key="use_vista_icons">Show Windows Vista icons while Retrostar is running</s:String>
     <s:String x:Key="use_vista_sounds">Play Windows Vista sounds while Retrostar is running</s:String>
     <s:String x:Key="aero_glass_blur">Aero glass _blur:</s:String>
     <s:String x:Key="allow_blur_behind">Allow see-_through glass</s:String>

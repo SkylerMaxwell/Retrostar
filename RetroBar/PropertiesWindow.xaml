@@ -510,6 +510,10 @@
                                       IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=UseVistaSounds, UpdateSourceTrigger=PropertyChanged}">
                                 <Label Content="{DynamicResource use_vista_sounds}" />
                             </CheckBox>
+                            <CheckBox x:Name="cbUseVistaIcons"
+                                      IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=UseVistaIcons, UpdateSourceTrigger=PropertyChanged}">
+                                <Label Content="{DynamicResource use_vista_icons}" />
+                            </CheckBox>
                         </StackPanel>
                     </GroupBox>
                     <GroupBox Header="{DynamicResource behavior_heading}" DockPanel.Dock="Top">

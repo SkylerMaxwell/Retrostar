@@ -41,6 +41,7 @@ namespace RetroBar
         private readonly Updater _updater;
         private readonly HotkeyManager _hotkeyManager;
         private readonly VistaSoundScheme _vistaSounds = new VistaSoundScheme();
+        private readonly VistaIconScheme _vistaIcons = new VistaIconScheme();
 
         public App()
         {
@@ -71,6 +72,7 @@ namespace RetroBar
             _dictionaryManager.SetLanguageFromSettings();
             loadTheme();
             UpdateVistaSounds();
+            UpdateVistaIcons();
 
             // Created before the taskbars so their Start buttons can subscribe to it as they load
             _startMenuManager = new StartMenuManager();
@@ -110,6 +112,23 @@ namespace RetroBar
             else if (e.PropertyName == nameof(Settings.UseVistaSounds))
             {
                 UpdateVistaSounds();
+            }
+            else if (e.PropertyName == nameof(Settings.UseVistaIcons))
+            {
+                UpdateVistaIcons();
+            }
+        }
+
+        /// <summary>Vista's icons show while Retrostar runs and the setting is on; otherwise Windows' own are in place.</summary>
+        private void UpdateVistaIcons()
+        {
+            if (Settings.Instance.UseVistaIcons)
+            {
+                _vistaIcons.Apply();
+            }
+            else
+            {
+                _vistaIcons.Restore();
             }
         }
 
@@ -174,8 +193,9 @@ namespace RetroBar
         {
             Settings.Instance.PropertyChanged -= Settings_PropertyChanged;
 
-            // First, so that the Windows sounds return even if something below fails
+            // First, so that the Windows sounds and icons return even if something below fails
             _vistaSounds.Dispose();
+            _vistaIcons.Dispose();
 
             _explorerMonitor.Dispose();
             _startMenuManager?.Dispose();

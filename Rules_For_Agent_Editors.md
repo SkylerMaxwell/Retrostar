@@ -195,6 +195,14 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
   `RetroBar/Resources/Sounds` (the csproj and the installer already copy that folder); events this Windows does not
   define are skipped. Start up, log on, log off and shut down are not mapped: Windows 8 and later do not play them
   while a program that started after sign-in is running.
+- Vista icons (`VistaIconScheme`): only per-user overrides (`HKCU\Software\Classes\<ProgID or CLSID\{...}>\DefaultIcon`)
+  of values that name Windows' own `imageres.dll` by resource ID (`imageres.dll,-ID`) where Vista's file has the same
+  ID; Windows merges per-user and machine-wide classes value by value, so only the icon changes. Never write the
+  machine-wide registry, never touch extension (`.ext`) keys or associations, never change a Windows file, and never
+  run code from the Vista DLL (it is read as data only). Same backup, owner, watchdog and mutex rules as the sounds;
+  Restore puts back only values that still hold Retrostar's, removes keys it created if they are left empty, and
+  `SHChangeNotify(SHCNE_ASSOCCHANGED)` follows every apply and restore so Explorer redraws without a restart. Icons
+  Windows draws from stock icons only (the plain folder on most Windows 11 builds) have no per-user override.
 - Windows 7 input language: Windows 7 Aero hides the toolbar grip (`ToolbarThumb`, which Windows 7 only shows beside
   the language button since it has no Quick Launch) and centres the language name (`LanguageBar`, `InputLanguage`).
   Other themes keep theirs.
@@ -304,6 +312,7 @@ Taskbar windows per screen, Explorer, the Windows Start menu, updates, clock fly
 - `RetroBar/Utilities/Updater.cs` — optional update check (off by default)
 - `RetroBar/Utilities/ClockFlyoutLauncher.cs` — opens the Windows clock and calendar flyout
 - `RetroBar/Utilities/VolumeChanger.cs` — system volume changes from the tray
+- `RetroBar/Utilities/VistaIconScheme.cs` — Windows Vista's icons while Retrostar runs: per-user DefaultIcon overrides pointing Windows' imageres.dll icons at `Resources\VistaIcons\vista-imageres.dll` (same resource IDs), with backup, restore and the watchdog process (`--restore-vista-icons <pid>`, handled first in `Program.Main`)
 - `RetroBar/Utilities/VistaSoundScheme.cs` — Windows Vista's sounds while Retrostar runs: points the user's sound scheme at `Resources\Sounds`, backs up and restores the original entries, and the watchdog process (`--restore-vista-sounds <pid>`, handled first in `Program.Main`)
 
 ### [1400] INPUT
