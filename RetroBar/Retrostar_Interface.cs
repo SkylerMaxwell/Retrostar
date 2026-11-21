@@ -282,9 +282,9 @@ namespace RetroBar
                 new PropertyMetadata(1.0));
 
         /// <summary>
-        /// Opacity of the theme's glass tint layer, set by the taskbar's AeroGlassSurface: AeroGlassHelper.TintOpacity
-        /// while the glass is live, otherwise 1, so opaque looks are never faded. Glass themes bind their tint layer's
-        /// Opacity to this.
+        /// Opacity of the theme's glass tint layer, set by the taskbar's GlassSurface: AeroGlassHelper.TintOpacity
+        /// while the glass is shown, otherwise 1, so opaque looks are never faded. Glass themes bind their tint
+        /// layer's Opacity to this.
         /// </summary>
         public double GlassTintOpacity
         {
@@ -314,7 +314,14 @@ namespace RetroBar
         private readonly Updater _updater;
         private bool _fullScreenSuppressed;
         private int _openMenus;
-        private readonly AeroGlassSurface _glass;
+
+        // Retrostar's own glass (AeroGlassHelper): the docked bar's glass is the desktop background behind it
+        // (WallpaperGlass); an auto-hidden bar's glass is the screen behind it, read as it starts to slide in
+        private readonly GlassSurface _glass;
+        private readonly WallpaperGlass _wallpaperGlass;
+        private GlassBackdrop _autoHideBackdrop;
+        private bool _autoHideRevealed;
+        private bool _autoHideHidden;
         
         public WindowManager windowManager;
         public HotkeyManager hotkeyManager;
@@ -329,10 +336,11 @@ namespace RetroBar
             this.windowManager = windowManager;
             this.hotkeyManager = hotkeyManager;
 
-            InitializeComponent();
+            _glass = new GlassSurface(this, value => GlassTintOpacity = value);
+            _wallpaperGlass = new WallpaperGlass(this, WallpaperGlass_Rendered);
+            Closed += (sender, e) => _wallpaperGlass.Dispose();
 
-            _glass = new AeroGlassSurface(this, value => GlassTintOpacity = value);
-            Closed += (sender, e) => _glass.Dispose();
+            InitializeComponent();
 
             IsAeroGlassEnabled = Settings.Instance.EnableAeroGlass;
 
@@ -360,6 +368,11 @@ namespace RetroBar
             FlowDirection = Application.Current.FindResource("flow_direction") as FlowDirection? ?? FlowDirection.LeftToRight;
 
             Settings.Instance.PropertyChanged += Settings_PropertyChanged;
+
+            if (Settings.Instance.ShowQuickLaunch)
+            {
+                QuickLaunchToolbar.Visibility = Visibility.Visible;
+            }
 
             if (Settings.Instance.ShowDesktopButton)
             {
@@ -435,7 +448,14 @@ namespace RetroBar
             }
             else if (e.PropertyName == nameof(Settings.ShowQuickLaunch))
             {
-                UpdateQuickLaunch();
+                if (Settings.Instance.ShowQuickLaunch)
+                {
+                    QuickLaunchToolbar.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    QuickLaunchToolbar.Visibility = Visibility.Collapsed;
+                }
             }
             else if (e.PropertyName == nameof(Settings.Edge))
             {
@@ -478,6 +498,9 @@ namespace RetroBar
                 if (AllowsTransparency == newTransparency)
                 {
                     AppBarMode = Settings.Instance.AutoHide ? AppBarMode.AutoHide : AppBarMode.Normal;
+                    _autoHideRevealed = false;
+                    _autoHideHidden = false;
+                    UpdateBlur();
                 }
                 else if (Screen.Primary)
                 {
@@ -632,8 +655,8 @@ namespace RetroBar
             if (msg == WM_DWMCOMPOSITIONCHANGED || msg == WM_DWMCOLORIZATIONCOLORCHANGED || msg == WM_THEMECHANGED ||
                 msg == (int)NativeMethods.WM.SETTINGCHANGE)
             {
-                // Theme and setting changes can bring back Windows' own frame treatment (Windows 11 corners and
-                // backdrop); prepare the window and its glass again once the change has settled
+                // A new desktop background, or a theme or setting change that can bring back Windows 11's own frame
+                // treatment: prepare the window and draw the glass again once the change has settled
                 Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
                 {
                     if (IsLoaded)
@@ -695,6 +718,26 @@ namespace RetroBar
 
         protected override void OnAutoHideAnimationBegin(bool isHiding)
         {
+            if (isHiding)
+            {
+                // The glass belongs to where the bar is shown; the bar slides away with its tint alone
+                _autoHideRevealed = false;
+                _autoHideHidden = false;
+                _autoHideBackdrop = null;
+                _glass.Clear();
+            }
+            else
+            {
+                // Read what is behind the bar while it is still hidden, so the glass shows the windows it slides over.
+                // A bar that had not finished hiding is partly on the screen and is not read, so the glass never
+                // contains the bar itself; it then shows its tint alone until it next slides in.
+                _autoHideBackdrop = _autoHideHidden && AllowsBlur() && AllowsTransparency &&
+                    AeroGlassHelper.TryGetWindowArea(Handle, out ScreenArea area)
+                    ? AeroGlassHelper.CaptureScreen(area.Inflate(AeroGlassHelper.GetBlurReach(DpiScale)))
+                    : null;
+                _autoHideHidden = false;
+            }
+
             base.OnAutoHideAnimationBegin(isHiding);
 
             // Prevent focus indicators and tooltips while hidden
@@ -714,6 +757,17 @@ namespace RetroBar
         protected override void OnAutoHideAnimationComplete(bool isHiding)
         {
             base.OnAutoHideAnimationComplete(isHiding);
+
+            if (isHiding)
+            {
+                _autoHideHidden = true;
+            }
+            else
+            {
+                // The bar is in place: draw its glass from what was behind it as it started to slide in
+                _autoHideRevealed = true;
+                ShowAutoHideGlass();
+            }
 
             if (isHiding && Settings.Instance.AutoHideTransparent && AllowsTransparency && AllowAutoHide)
             {
@@ -752,12 +806,14 @@ namespace RetroBar
         {
             UpdateTrayPosition();
             StartButton?.UpdateFloatingStartCoordinates();
+            _wallpaperGlass.RefreshSoon();
         }
 
         private void Taskbar_OnSizeChanged(object sender, SizeChangedEventArgs e)
         {
             UpdateTrayPosition();
             StartButton?.UpdateFloatingStartCoordinates();
+            _wallpaperGlass.RefreshSoon();
         }
 
         private void Taskbar_Deactivated(object sender, EventArgs e)
@@ -942,18 +998,6 @@ namespace RetroBar
             TaskListControl.Visibility = useSuperbar ? Visibility.Collapsed : Visibility.Visible;
             SuperbarControl.Visibility = useSuperbar ? Visibility.Visible : Visibility.Collapsed;
             SuperbarControl.SetActive(useSuperbar);
-            UpdateQuickLaunch();
-        }
-
-        /// <summary>
-        /// Shows Quick Launch when it is turned on, except with the superbar: Windows 7 replaced Quick Launch with
-        /// pinned programs, which the superbar already shows.
-        /// </summary>
-        private void UpdateQuickLaunch()
-        {
-            bool useSuperbar = Application.Current.TryFindResource("UseSuperbar") as bool? ?? false;
-
-            QuickLaunchToolbar.Visibility = Settings.Instance.ShowQuickLaunch && !useSuperbar ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void UpdateStartButton()
@@ -990,20 +1034,77 @@ namespace RetroBar
                    (Application.Current.FindResource("AllowsTransparency") as bool? ?? false);
         }
 
+        /// <summary>
+        /// Shows or removes the glass to match the theme and the glass settings. The glass is Retrostar's own
+        /// (AeroGlassHelper); no Windows transparency effect is used.
+        /// </summary>
         private void UpdateBlur()
         {
-            // Windows' own transparency effects are never used: ManagedShell's blur (Acrylic or the Windows 11 system
-            // backdrop) stays off, and the glass is Retrostar's own, drawn by the AeroGlassSurface.
+            if (_glass == null || _wallpaperGlass == null)
+            {
+                return;
+            }
+
+            // ManagedShell's own blur is Acrylic (Windows 10) or the system backdrop (Windows 11), both Windows
+            // transparency effects. It always stays off.
             SetBlur(false);
 
-            if (AllowsBlur() && AllowsTransparency && Handle != IntPtr.Zero)
+            if (!AllowsBlur() || !AllowsTransparency || Handle == IntPtr.Zero)
             {
-                _glass.Start();
+                _wallpaperGlass.Stop();
+                _autoHideBackdrop = null;
+                _glass.Clear();
+                return;
             }
-            else
+
+            AeroGlassHelper.PrepareWindow(Handle);
+
+            if (AppBarMode == AppBarMode.AutoHide)
             {
-                _glass.Stop();
+                // An auto-hidden bar slides over windows, so its glass is read from the screen each time it slides in
+                _wallpaperGlass.Stop();
+
+                if (_autoHideRevealed)
+                {
+                    _glass.UpdateTint();
+                }
+                else
+                {
+                    _glass.Clear();
+                }
+
+                return;
             }
+
+            // A docked bar always sits over the desktop background
+            _glass.UpdateTint();
+            _wallpaperGlass.Start();
+        }
+
+        private void WallpaperGlass_Rendered(System.Windows.Media.Imaging.BitmapSource glass)
+        {
+            if (!AllowsBlur() || !AllowsTransparency || AppBarMode == AppBarMode.AutoHide)
+            {
+                return;
+            }
+
+            // Null when the background could not be drawn: the bar keeps its tint alone until it can be
+            _glass.Show(glass);
+        }
+
+        private void ShowAutoHideGlass()
+        {
+            GlassBackdrop backdrop = _autoHideBackdrop;
+            _autoHideBackdrop = null;
+
+            if (backdrop == null || !AllowsBlur() || !AllowsTransparency || AppBarMode != AppBarMode.AutoHide ||
+                !AeroGlassHelper.TryGetWindowArea(Handle, out ScreenArea area))
+            {
+                return;
+            }
+
+            AeroGlassHelper.PrepareWindow(Handle);
+            _glass.Show(AeroGlassHelper.RenderGlass(backdrop, area, DpiScale));
         }
 
         #region Unlocked taskbar drag hook
@@ -3649,7 +3750,10 @@ namespace RetroBar.Controls
         public static readonly DependencyProperty GlassTintOpacityProperty =
             DependencyProperty.Register(nameof(GlassTintOpacity), typeof(double), typeof(SuperbarWindowList), new PropertyMetadata(1.0));
 
-        /// <summary>Opacity of the frame's glass tint, set by the window's AeroGlassSurface: AeroGlassHelper.TintOpacity while the glass is live, otherwise 1.</summary>
+        /// <summary>
+        /// Opacity of the frame's glass tint, set by the list's GlassSurface: AeroGlassHelper.TintOpacity while the
+        /// glass is shown, otherwise 1.
+        /// </summary>
         public double GlassTintOpacity
         {
             get => (double)GetValue(GlassTintOpacityProperty);
@@ -3684,18 +3788,21 @@ namespace RetroBar.Controls
         public bool IsClosed { get; private set; }
 
         private IntPtr _handle;
-        private readonly AeroGlassSurface _glass;
         private Taskbar _host;
         private FrameworkElement _anchor;
         private bool _thumbnails;
         private readonly Dictionary<ApplicationWindow, IntPtr> _thumbs = new Dictionary<ApplicationWindow, IntPtr>();
 
+        // Retrostar's own glass (AeroGlassHelper): the screen the list opens on, read just before it is shown, blurred.
+        // The list's size depends on its windows, so the whole screen is read and kept while the list is open.
+        private readonly GlassSurface _glass;
+        private GlassBackdrop _glassBackdrop;
+
         public SuperbarWindowList()
         {
-            InitializeComponent();
+            _glass = new GlassSurface(this, value => GlassTintOpacity = value);
 
-            _glass = new AeroGlassSurface(this, value => GlassTintOpacity = value);
-            Closed += (sender, e) => _glass.Dispose();
+            InitializeComponent();
 
             Left = -32000;
             Top = -32000;
@@ -3751,7 +3858,9 @@ namespace RetroBar.Controls
                 Hide();
             }
 
-            _glass.Stop();
+            // The next opening reads the screen again
+            _glassBackdrop = null;
+            _glass.Clear();
         }
 
         private void Windows_CollectionChanged(object sender, NotifyCollectionChangedEventArgs e)
@@ -3788,6 +3897,9 @@ namespace RetroBar.Controls
 
             if (!IsVisible)
             {
+                // What is behind the list is read before the list is shown, so its glass can never contain the list
+                _glassBackdrop = IsGlass ? CaptureGlassBackdrop() : null;
+
                 Opacity = 0;
                 Show();
             }
@@ -3795,20 +3907,7 @@ namespace RetroBar.Controls
             UpdateLayout();
             Position();
             UpdateWindowRegion();
-
-            // Retrostar's own glass, as on the taskbar: live while "Allow blur behind" is on, otherwise opaque
-            if (!IsGlass)
-            {
-                _glass.Stop();
-            }
-            else if (AeroGlassHelper.IsSeeThroughEnabled)
-            {
-                _glass.Start();
-            }
-            else
-            {
-                _glass.StartOpaque();
-            }
+            UpdateGlass();
 
             if (_thumbnails)
             {
@@ -3817,6 +3916,29 @@ namespace RetroBar.Controls
 
             Opacity = 1;
             IsOpen = true;
+        }
+
+        private GlassBackdrop CaptureGlassBackdrop()
+        {
+            IntPtr hostHandle = _host == null ? IntPtr.Zero : new WindowInteropHelper(_host).Handle;
+
+            return hostHandle == IntPtr.Zero ? null : AeroGlassHelper.CaptureScreen(AeroGlassHelper.GetMonitorArea(hostHandle));
+        }
+
+        /// <summary>
+        /// Draws the list's glass from the screen read as it opened, at its current size and place, or removes it for
+        /// the opaque Basic look. No Windows transparency effect is used.
+        /// </summary>
+        private void UpdateGlass()
+        {
+            if (!IsGlass || _glassBackdrop == null || !AeroGlassHelper.TryGetWindowArea(_handle, out ScreenArea area))
+            {
+                _glass.Clear();
+                return;
+            }
+
+            AeroGlassHelper.PrepareWindow(_handle);
+            _glass.Show(AeroGlassHelper.RenderGlass(_glassBackdrop, area, VisualTreeHelper.GetDpi(this).DpiScaleX));
         }
 
         /// <summary>
@@ -6802,7 +6924,7 @@ namespace RetroBar
         {
             if (!EnvironmentHelper.IsWindows10OrBetter)
             {
-                cbAllowBlurBehind.Visibility = Visibility.Collapsed;
+                // Aero glass is Retrostar's own and works on every supported Windows, so its settings always show
                 cbShowStartButtonMultiMon.Visibility = Visibility.Collapsed;
             }
         }
@@ -8118,8 +8240,8 @@ namespace RetroBar.StartMenu
             DependencyProperty.Register(nameof(GlassTintOpacity), typeof(double), typeof(VistaStartMenu), new PropertyMetadata(1.0));
 
         /// <summary>
-        /// Opacity of the frame's glass tint (FrameTint), set by the menu's AeroGlassSurface: AeroGlassHelper.TintOpacity
-        /// while the glass is live, otherwise 1.
+        /// Opacity of the frame's glass tint (FrameTint), set by the menu's GlassSurface: AeroGlassHelper.TintOpacity
+        /// while the glass is shown, otherwise 1.
         /// </summary>
         public double GlassTintOpacity
         {
@@ -8181,11 +8303,17 @@ namespace RetroBar.StartMenu
         private CancellationTokenSource _searchCancellation;
         private readonly DispatcherTimer _fileSearchTimer;
         private ImageSource _userPicture;
-        private readonly AeroGlassSurface _glass;
         private readonly UserPictureWindow _pictureWindow;
         private bool _pictureWindowClosed;
         private int _menuX;
         private int _menuY;
+
+        // Retrostar's own glass (AeroGlassHelper): what is behind the menu, read just before it opens, blurred
+        private readonly GlassSurface _glass;
+        private GlassBackdrop _glassBackdrop;
+
+        // Extra screen read around where the menu is expected, in device-independent pixels, for rounding
+        private const double GlassCaptureSlack = 16;
 
         // The user picture's top-left corner relative to the menu's, in device-independent pixels:
         // centred over the right column and overhanging the top edge by 25 px, as measured in Vista
@@ -8204,9 +8332,9 @@ namespace RetroBar.StartMenu
 
         public VistaStartMenu()
         {
-            InitializeComponent();
+            _glass = new GlassSurface(this, value => GlassTintOpacity = value);
 
-            _glass = new AeroGlassSurface(this, value => GlassTintOpacity = value);
+            InitializeComponent();
 
             _fileSearchTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
             {
@@ -8236,6 +8364,9 @@ namespace RetroBar.StartMenu
 
             ShowView(MenuView.Home);
             SearchBox.Text = string.Empty;
+
+            // What is behind the menu is read before the menu is shown, so its glass can never contain the menu
+            _glassBackdrop = IsGlass ? CaptureGlassBackdrop() : null;
 
             Opacity = 0;
             Show();
@@ -8275,7 +8406,11 @@ namespace RetroBar.StartMenu
             CancelSearch();
             _pictureWindow.Hide();
             Hide();
-            _glass.Stop();
+
+            // The glass shows what was behind the menu as it opened; the next opening reads it again
+            _glassBackdrop = null;
+            _glass.Clear();
+
             MenuClosed?.Invoke(this, EventArgs.Empty);
         }
 
@@ -8286,7 +8421,6 @@ namespace RetroBar.StartMenu
 
         private void Window_Closed(object sender, EventArgs e)
         {
-            _glass.Dispose();
             _pictureWindow.PictureClicked -= PictureWindow_PictureClicked;
 
             // WPF closes owned windows along with their owner; close it here only if that has not happened
@@ -8413,12 +8547,23 @@ namespace RetroBar.StartMenu
             int width = (int)Math.Round(ActualWidth * scale);
             int height = (int)Math.Round(ActualHeight * scale);
 
+            GetMenuOrigin(width, height, out int x, out int y);
+
+            _menuX = x;
+            _menuY = y;
+
+            StartMenuNative.SetWindowPos(_handle, StartMenuNative.HWND_TOPMOST, x, y, 0, 0, StartMenuNative.SWP_NOSIZE | StartMenuNative.SWP_NOACTIVATE);
+        }
+
+        /// <summary>
+        /// Where the menu's top-left corner goes, in device pixels, for a menu of the given size in device pixels:
+        /// against the taskbar's leading end, kept on the taskbar's screen. Host must be set.
+        /// </summary>
+        private void GetMenuOrigin(int width, int height, out int x, out int y)
+        {
             var bar = Host.WindowRect;
             var screen = Host.Screen.Bounds;
             bool rightToLeft = Host.FlowDirection == FlowDirection.RightToLeft;
-
-            int x;
-            int y;
 
             switch (Host.AppBarEdge)
             {
@@ -8442,11 +8587,35 @@ namespace RetroBar.StartMenu
 
             x = Math.Max(screen.Left, Math.Min(x, screen.Right - width));
             y = Math.Max(screen.Top, Math.Min(y, screen.Bottom - height));
+        }
 
-            _menuX = x;
-            _menuY = y;
+        /// <summary>
+        /// Reads the screen where the menu is about to open, before it is shown, so its glass shows what is behind it
+        /// and never the menu. The place is worked out from the frame's size, which is the menu's size; the area read
+        /// reaches past it by the blur's reach and a little more for rounding.
+        /// </summary>
+        private GlassBackdrop CaptureGlassBackdrop()
+        {
+            IntPtr hostHandle = Host == null ? IntPtr.Zero : new WindowInteropHelper(Host).Handle;
 
-            StartMenuNative.SetWindowPos(_handle, StartMenuNative.HWND_TOPMOST, x, y, 0, 0, StartMenuNative.SWP_NOSIZE | StartMenuNative.SWP_NOACTIVATE);
+            if (hostHandle == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            if (double.IsNaN(Frame.Width) || double.IsNaN(Frame.Height))
+            {
+                // No fixed size to work from: read the whole screen the menu opens on
+                return AeroGlassHelper.CaptureScreen(AeroGlassHelper.GetMonitorArea(hostHandle));
+            }
+
+            double scale = VisualTreeHelper.GetDpi(Host).DpiScaleX;
+            int width = (int)Math.Round(Frame.Width * scale);
+            int height = (int)Math.Round(Frame.Height * scale);
+            GetMenuOrigin(width, height, out int x, out int y);
+
+            int margin = AeroGlassHelper.GetBlurReach(scale) + (int)Math.Ceiling(GlassCaptureSlack * scale);
+            return AeroGlassHelper.CaptureScreen(new ScreenArea(x, y, x + width, y + height).Inflate(margin));
         }
 
         /// <summary>
@@ -8493,28 +8662,35 @@ namespace RetroBar.StartMenu
         }
 
         /// <summary>
-        /// The menu's glass is Retrostar's own (AeroGlassSurface): live while "Allow blur behind" is on, otherwise
-        /// opaque. It runs only while the menu is shown.
+        /// Draws the menu's glass from what was behind it as it opened (CaptureGlassBackdrop), or removes it for the
+        /// opaque Basic look. No Windows transparency effect is used.
         /// </summary>
         private void UpdateGlass()
         {
-            if (_glass == null)
+            if (!IsGlass)
             {
-                // Not yet created: a property set while the window is being built
+                _glassBackdrop = null;
+                _glass.Clear();
                 return;
             }
 
-            if (!IsGlass || _handle == IntPtr.Zero || !IsVisible)
+            if (_handle == IntPtr.Zero || !IsVisible)
             {
-                _glass.Stop();
+                // The glass is drawn as the menu opens
+                return;
             }
-            else if (AeroGlassHelper.IsSeeThroughEnabled)
+
+            GlassBackdrop backdrop = _glassBackdrop;
+            _glassBackdrop = null;
+
+            if (backdrop != null && AeroGlassHelper.TryGetWindowArea(_handle, out ScreenArea area))
             {
-                _glass.Start();
+                AeroGlassHelper.PrepareWindow(_handle);
+                _glass.Show(AeroGlassHelper.RenderGlass(backdrop, area, VisualTreeHelper.GetDpi(this).DpiScaleX));
             }
             else
             {
-                _glass.StartOpaque();
+                _glass.UpdateTint();
             }
         }
 

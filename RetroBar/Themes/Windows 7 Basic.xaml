@@ -1,11 +1,11 @@
 ﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <!--
-        Windows 7 Basic: Vista Basic's opaque taskbar with the Windows 7 superbar. Windows Vista Basic is merged last,
-        so its opaque brushes take precedence over the Aero ones that Windows 7 Aero brings in.
+        Windows 7 Basic. Until measured Windows 7 taskbar images are supplied, this theme is the Windows Vista Basic
+        taskbar exactly, with nothing redefined here. The Windows 7 Basic look is to be built in this file, on top of
+        Vista Basic's, from those images.
     -->
     <ResourceDictionary.MergedDictionaries>
-        <ResourceDictionary Source="Windows 7 Aero.xaml" />
         <ResourceDictionary Source="Windows Vista Basic.xaml" />
     </ResourceDictionary.MergedDictionaries>
 </ResourceDictionary>
