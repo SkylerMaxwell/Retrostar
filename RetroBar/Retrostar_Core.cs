@@ -329,7 +329,17 @@ namespace RetroBar.Utilities
         public string Theme
         {
             get => _theme;
-            set => Set(ref _theme, value);
+            set
+            {
+                // Windows 7 Basic is no longer a separate theme: Windows 7 Aero shows the Basic look while Aero glass is off.
+                if (value == "Windows 7 Basic")
+                {
+                    value = "Windows 7 Aero";
+                    _migrationPerformed = true;
+                }
+
+                Set(ref _theme, value);
+            }
         }
 
         private bool _showInputLanguage = false;

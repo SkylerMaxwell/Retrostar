@@ -356,11 +356,6 @@ namespace RetroBar
 
             Settings.Instance.PropertyChanged += Settings_PropertyChanged;
 
-            if (Settings.Instance.ShowQuickLaunch)
-            {
-                QuickLaunchToolbar.Visibility = Visibility.Visible;
-            }
-
             if (Settings.Instance.ShowDesktopButton)
             {
                 ShowDesktopButtonTray.Visibility = Visibility.Visible;
@@ -435,14 +430,7 @@ namespace RetroBar
             }
             else if (e.PropertyName == nameof(Settings.ShowQuickLaunch))
             {
-                if (Settings.Instance.ShowQuickLaunch)
-                {
-                    QuickLaunchToolbar.Visibility = Visibility.Visible;
-                }
-                else
-                {
-                    QuickLaunchToolbar.Visibility = Visibility.Collapsed;
-                }
+                UpdateQuickLaunch();
             }
             else if (e.PropertyName == nameof(Settings.Edge))
             {
@@ -803,6 +791,12 @@ namespace RetroBar
 
         private void CustomizeNotificationsMenuItem_OnClick(object sender, RoutedEventArgs e)
         {
+            OpenCustomizeNotifications();
+        }
+
+        /// <summary>Opens Properties at the notification icon settings (the menu item, and the Windows 7 overflow's Customize link).</summary>
+        internal void OpenCustomizeNotifications()
+        {
             PropertiesWindow propWindow = PropertiesWindow.Open(_shellManager.NotificationArea, _dictionaryManager, Screen, DpiScale, Orientation == Orientation.Horizontal ? DesiredHeight : DesiredWidth);
             propWindow.OpenCustomizeNotifications();
         }
@@ -943,12 +937,31 @@ namespace RetroBar
         /// </summary>
         private void UpdateSuperbar()
         {
-            bool useSuperbar = Application.Current.TryFindResource("UseSuperbar") as bool? ?? false;
+            bool useSuperbar = UsesSuperbar();
 
             TaskListControl.SetActive(!useSuperbar);
             TaskListControl.Visibility = useSuperbar ? Visibility.Collapsed : Visibility.Visible;
             SuperbarControl.Visibility = useSuperbar ? Visibility.Visible : Visibility.Collapsed;
             SuperbarControl.SetActive(useSuperbar);
+
+            UpdateQuickLaunch();
+        }
+
+        private static bool UsesSuperbar()
+        {
+            return Application.Current.TryFindResource("UseSuperbar") as bool? ?? false;
+        }
+
+        /// <summary>
+        /// Shows Quick Launch when it is turned on, except under a superbar theme (Windows 7): Windows 7 has no Quick Launch,
+        /// pinned programs are full-size superbar buttons and a program opens on its pinned button. The setting is kept
+        /// and applies again under every other theme.
+        /// </summary>
+        private void UpdateQuickLaunch()
+        {
+            QuickLaunchToolbar.Visibility = Settings.Instance.ShowQuickLaunch && !UsesSuperbar()
+                ? Visibility.Visible
+                : Visibility.Collapsed;
         }
 
         private void UpdateStartButton()
@@ -4612,6 +4625,7 @@ namespace RetroBar.Controls
         private ObservableCollection<Tray.NotifyIcon> promotedIcons = new ObservableCollection<Tray.NotifyIcon>();
         private NotifyIconDropHandler dropHandler;
         private ListCollectionView collectionView;
+        private ListCollectionView overflowView;
 
         public static DependencyProperty NotificationAreaProperty = DependencyProperty.Register(nameof(NotificationArea), typeof(NotificationArea), typeof(NotifyIconList), new PropertyMetadata(NotificationAreaChangedCallback));
 
@@ -4628,7 +4642,16 @@ namespace RetroBar.Controls
 
         private bool IsCollapsed()
         {
-            return Settings.Instance.CollapseNotifyIcons && NotifyIconToggleButton.IsChecked != true;
+            // With the overflow flyout the hidden icons are never expanded into the bar
+            return Settings.Instance.CollapseNotifyIcons && (UsesOverflow() || NotifyIconToggleButton.IsChecked != true);
+        }
+
+        /// <summary>
+        /// Whether the theme shows hidden icons in a flyout (UseNotifyIconOverflow, Windows 7) rather than in the bar.
+        /// </summary>
+        private static bool UsesOverflow()
+        {
+            return Application.Current.TryFindResource("UseNotifyIconOverflow") as bool? ?? false;
         }
 
         private void Settings_PropertyChanged(object sender, PropertyChangedEventArgs e)
@@ -4649,6 +4672,13 @@ namespace RetroBar.Controls
             else if (e.PropertyName == nameof(Settings.InvertIconsMode) || e.PropertyName == nameof(Settings.InvertNotifyIcons) || e.PropertyName == nameof(Settings.NotifyIconOrder))
             {
                 // Reload icons
+                collectionView?.Refresh();
+                overflowView?.Refresh();
+            }
+            else if (e.PropertyName == nameof(Settings.Theme) && UsesOverflow() && NotifyIconToggleButton.IsChecked == true)
+            {
+                // Icons expanded into the bar by another theme collapse again under a theme with the overflow flyout
+                NotifyIconToggleButton.IsChecked = false;
                 collectionView?.Refresh();
             }
         }
@@ -4693,6 +4723,18 @@ namespace RetroBar.Controls
             if (icon is Tray.NotifyIcon notifyIcon)
             {
                 return (!IsCollapsed() || notifyIcon.IsPinned)
+                    && !notifyIcon.IsHidden
+                    && notifyIcon.GetBehavior() != NotifyIconBehavior.Remove;
+            }
+            return false;
+        }
+
+        private bool OverflowIcons_Filter(object icon)
+        {
+            // The overflow flyout shows exactly the icons the collapsed bar leaves out
+            if (icon is Tray.NotifyIcon notifyIcon)
+            {
+                return !notifyIcon.IsPinned
                     && !notifyIcon.IsHidden
                     && notifyIcon.GetBehavior() != NotifyIconBehavior.Remove;
             }
@@ -4799,8 +4841,137 @@ namespace RetroBar.Controls
 
         private void NotifyIconToggleButton_OnClick(object sender, RoutedEventArgs e)
         {
+            if (UsesOverflow())
+            {
+                if (NotifyIconToggleButton.IsChecked == true)
+                {
+                    OpenOverflow();
+                }
+                return;
+            }
+
             collectionView?.Refresh();
         }
+
+        private void NotifyIconToggleButton_OnUnchecked(object sender, RoutedEventArgs e)
+        {
+            OverflowPopup.IsOpen = false;
+        }
+
+        #region Overflow flyout
+
+        private void OpenOverflow()
+        {
+            if (NotificationArea == null || OverflowPopup.IsOpen)
+            {
+                return;
+            }
+
+            if (overflowView == null)
+            {
+                overflowView = new ListCollectionView(NotificationArea.TrayIcons);
+                overflowView.CustomSort = new NotifyIconComparer(this);
+                overflowView.Filter = OverflowIcons_Filter;
+                var overflowViewShaping = overflowView as ICollectionViewLiveShaping;
+                overflowViewShaping.IsLiveFiltering = true;
+                overflowViewShaping.LiveFilteringProperties.Add("IsHidden");
+                overflowViewShaping.LiveFilteringProperties.Add("IsPinned");
+                OverflowIcons.ItemsSource = overflowView;
+            }
+            else
+            {
+                overflowView.Refresh();
+            }
+
+            Taskbar host = Window.GetWindow(this) as Taskbar;
+            OverflowFrame.DataContext = host;
+            OverflowIcons.Tag = host;
+
+            OverflowPopup.IsOpen = true;
+        }
+
+        private void OverflowPopup_Opened(object sender, EventArgs e)
+        {
+            // A click on the button while the flyout is open only closes it, as in Windows 7
+            NotifyIconToggleButton.IsHitTestVisible = false;
+
+            PositionOverflow();
+
+            if (AeroGlassHelper.IsSeeThrough && PresentationSource.FromVisual(OverflowFrame) is System.Windows.Interop.HwndSource source)
+            {
+                AeroGlassHelper.PrepareGlassWindow(source.Handle);
+            }
+        }
+
+        private void OverflowPopup_Closed(object sender, EventArgs e)
+        {
+            NotifyIconToggleButton.IsChecked = false;
+
+            // Re-enabled after the click that closed the flyout has been handled
+            Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            {
+                NotifyIconToggleButton.IsHitTestVisible = true;
+            }));
+        }
+
+        private void OverflowFrame_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (OverflowPopup.IsOpen)
+            {
+                PositionOverflow();
+            }
+        }
+
+        /// <summary>
+        /// Places the flyout centred on the button, NotifyIconOverflowGap away from the taskbar's inner edge, on the side
+        /// of the bar facing the desktop. Distances are taken in the button's own coordinates, as the popup's are.
+        /// </summary>
+        private void PositionOverflow()
+        {
+            if (!(Window.GetWindow(this) is Taskbar host))
+            {
+                return;
+            }
+
+            FrameworkElement target = NotifyIconToggleButton;
+            double gap = Application.Current.TryFindResource("NotifyIconOverflowGap") as double? ?? 0;
+            Point barStart = host.TranslatePoint(new Point(0, 0), target);
+            Point barEnd = host.TranslatePoint(new Point(host.ActualWidth, host.ActualHeight), target);
+            double centreX = (target.ActualWidth - OverflowFrame.ActualWidth) / 2;
+            double centreY = (target.ActualHeight - OverflowFrame.ActualHeight) / 2;
+
+            switch (host.AppBarEdge)
+            {
+                case ManagedShell.AppBar.AppBarEdge.Top:
+                    OverflowPopup.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+                    OverflowPopup.HorizontalOffset = centreX;
+                    OverflowPopup.VerticalOffset = barEnd.Y - target.ActualHeight + gap;
+                    break;
+                case ManagedShell.AppBar.AppBarEdge.Left:
+                    OverflowPopup.Placement = System.Windows.Controls.Primitives.PlacementMode.Right;
+                    OverflowPopup.HorizontalOffset = barEnd.X - target.ActualWidth + gap;
+                    OverflowPopup.VerticalOffset = centreY;
+                    break;
+                case ManagedShell.AppBar.AppBarEdge.Right:
+                    OverflowPopup.Placement = System.Windows.Controls.Primitives.PlacementMode.Left;
+                    OverflowPopup.HorizontalOffset = barStart.X - gap;
+                    OverflowPopup.VerticalOffset = centreY;
+                    break;
+                default:
+                    OverflowPopup.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
+                    OverflowPopup.HorizontalOffset = centreX;
+                    OverflowPopup.VerticalOffset = barStart.Y - gap;
+                    break;
+            }
+        }
+
+        private void OverflowCustomizeButton_OnClick(object sender, RoutedEventArgs e)
+        {
+            OverflowPopup.IsOpen = false;
+            (Window.GetWindow(this) as Taskbar)?.OpenCustomizeNotifications();
+        }
+
+        #endregion
 
         private void SetToggleVisibility()
         {

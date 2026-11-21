@@ -21,6 +21,7 @@
         <ToggleButton Name="NotifyIconToggleButton"
                       Visibility="Collapsed"
                       Click="NotifyIconToggleButton_OnClick"
+                      Unchecked="NotifyIconToggleButton_OnUnchecked"
                       Style="{DynamicResource TrayToggleButton}"/>
         <ItemsControl x:Name="NotifyIcons"
                       Focusable="False"
@@ -48,5 +49,50 @@
                 </ItemContainerTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
+        <!--
+            Notification area overflow, for themes that set UseNotifyIconOverflow (Windows 7): the hidden icons in a flyout
+            above the "show hidden icons" button, with a Customize link, in place of expanding them into the bar. The look
+            is the theme's (NotifyIconOverflowFrame, NotifyIconOverflowItems, NotifyIconOverflowCell,
+            NotifyIconOverflowCustomize); the frame's DataContext and the icon list's Tag are the taskbar.
+        -->
+        <Popup x:Name="OverflowPopup"
+               PlacementTarget="{Binding ElementName=NotifyIconToggleButton}"
+               Placement="Top"
+               AllowsTransparency="True"
+               StaysOpen="False"
+               PopupAnimation="None"
+               Opened="OverflowPopup_Opened"
+               Closed="OverflowPopup_Closed">
+            <ContentControl x:Name="OverflowFrame"
+                            Focusable="False"
+                            Style="{DynamicResource NotifyIconOverflowFrame}"
+                            SizeChanged="OverflowFrame_SizeChanged">
+                <StackPanel>
+                    <ItemsControl x:Name="OverflowIcons"
+                                  Focusable="False"
+                                  Style="{DynamicResource NotifyIconOverflowItems}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <!-- Columns and rows as near square as the icons allow, wider than tall, as Windows 7 lays them out -->
+                                <UniformGrid />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <ItemContainerTemplate>
+                                <Border Style="{DynamicResource NotifyIconOverflowCell}">
+                                    <local:NotifyIcon HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"
+                                                      Host="{Binding Path=Tag, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType=ItemsControl}}" />
+                                </Border>
+                            </ItemContainerTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Button x:Name="OverflowCustomizeButton"
+                            Content="{DynamicResource customize}"
+                            Style="{DynamicResource NotifyIconOverflowCustomize}"
+                            Click="OverflowCustomizeButton_OnClick" />
+                </StackPanel>
+            </ContentControl>
+        </Popup>
     </StackPanel>
 </UserControl>
