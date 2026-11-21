@@ -9,10 +9,12 @@ It is built on the [ManagedShell](https://github.com/cairoshell/ManagedShell) li
 ## What Retrostar adds
 - Vista-style Start menu with pinned programs, All Programs, a right-hand column, and a power strip
 - Local Start menu search of programs and files, with no web results
-- Aero glass blur for the taskbar and Start menu, controlled by one setting
+- Aero glass for the taskbar and Start menu: live see-through glass from Windows' own compositor, with Windows' own tint and Windows 11 materials switched off, a transparency slider and an adjustable blur behind the glass (Windows 10 and later)
+- Start menu scale, from 100% to 200%, with sharp text at every size
 - Start orb that sits above the open menu
 - Windows key and Ctrl+Esc open the Vista menu
-- Windows 7 taskbar (Windows 7 Aero and Windows 7 Basic themes): icon-only buttons that combine each program's windows, pinned programs, live thumbnails, a hover glow in the icon's colour, and a Show Desktop strip
+- Windows 7 taskbar (Windows 7 Aero theme): icon-only buttons that combine each program's windows, pinned programs, live thumbnails, a hover glow in the icon's colour, and a Show Desktop strip
+- Windows Vista sounds while Retrostar runs (Properties > Advanced): Windows' own sounds return when it closes
 - Windows 7 Start menu, chosen in Properties > Start Menu: search box in the program list, Devices and Printers, and a Shut down button
 
 ## Features

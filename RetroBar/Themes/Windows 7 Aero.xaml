@@ -561,9 +561,40 @@
         </ControlTemplate.Triggers>
     </ControlTemplate>
 
+    <!--
+        Input language: Windows 7 has no toolbar grip beside it (the grip is also Quick Launch's, which Windows 7 does
+        not show), and the language name is centred in the bar.
+    -->
+    <Style TargetType="Thumb"
+           x:Key="ToolbarThumb"
+           BasedOn="{StaticResource ToolbarThumb}">
+        <Setter Property="Visibility"
+                Value="Collapsed" />
+    </Style>
+
+    <Style TargetType="WrapPanel"
+           x:Key="LanguageBar"
+           BasedOn="{StaticResource LanguageBar}">
+        <Setter Property="Margin"
+                Value="2,0" />
+        <Setter Property="HorizontalAlignment"
+                Value="Center" />
+        <Setter Property="VerticalAlignment"
+                Value="Center" />
+        <Style.Triggers>
+            <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
+                         Value="Vertical">
+                <Setter Property="Margin"
+                        Value="0,2" />
+            </DataTrigger>
+        </Style.Triggers>
+    </Style>
+
     <Style TargetType="TextBlock"
            x:Key="InputLanguage"
            BasedOn="{StaticResource InputLanguage}">
+        <Setter Property="Margin"
+                Value="0" />
         <Style.Triggers>
             <DataTrigger Binding="{Binding Path=IsAeroGlassEnabled, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
                          Value="False">

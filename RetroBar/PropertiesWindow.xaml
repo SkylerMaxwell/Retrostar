@@ -539,6 +539,27 @@
                                         LargeChange="10"
                                         Value="{Binding Source={x:Static Settings:Settings.Instance}, Path=AeroGlassTransparency, UpdateSourceTrigger=PropertyChanged}" />
                             </DockPanel>
+                            <!-- Blur behind see-through glass: 0% is sharp glass, 100% is Windows' full blur (GlassBlurBackdrop) -->
+                            <DockPanel IsEnabled="{Binding Source={x:Static Settings:Settings.Instance}, Path=EnableAeroGlass, UpdateSourceTrigger=PropertyChanged}">
+                                <Label VerticalAlignment="Center"
+                                       Target="{Binding ElementName=sliderAeroGlassBlur}">
+                                    <AccessText Text="{DynamicResource aero_glass_blur}" />
+                                </Label>
+                                <TextBlock DockPanel.Dock="Right"
+                                           VerticalAlignment="Center"
+                                           MinWidth="34"
+                                           TextAlignment="Right"
+                                           Text="{Binding Source={x:Static Settings:Settings.Instance}, Path=AeroGlassBlur, StringFormat={}{0}%}" />
+                                <Slider x:Name="sliderAeroGlassBlur"
+                                        VerticalAlignment="Center"
+                                        Minimum="0"
+                                        Maximum="100"
+                                        TickFrequency="5"
+                                        IsSnapToTickEnabled="True"
+                                        SmallChange="5"
+                                        LargeChange="10"
+                                        Value="{Binding Source={x:Static Settings:Settings.Instance}, Path=AeroGlassBlur, UpdateSourceTrigger=PropertyChanged}" />
+                            </DockPanel>
                             <CheckBox x:Name="cbAllowBlurBehind"
                                       IsEnabled="{Binding Source={x:Static Settings:Settings.Instance}, Path=EnableAeroGlass, UpdateSourceTrigger=PropertyChanged}"
                                       IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=AllowBlurBehind, UpdateSourceTrigger=PropertyChanged}">
@@ -734,6 +755,27 @@
                                         </ComboBox.Style>
                                     </ComboBox>
                                 </Grid>
+                            </DockPanel>
+                            <!-- Zooms the whole Start menu, 100% to 200% in 5% steps, like Taskbar scale -->
+                            <DockPanel IsEnabled="{Binding Source={x:Static Settings:Settings.Instance}, Path=UseVistaStartMenu, UpdateSourceTrigger=PropertyChanged}">
+                                <Label VerticalAlignment="Center"
+                                       Target="{Binding ElementName=sldStartMenuScale}">
+                                    <AccessText Text="{DynamicResource start_menu_scale}" />
+                                </Label>
+                                <TextBlock DockPanel.Dock="Right"
+                                           VerticalAlignment="Center"
+                                           MinWidth="34"
+                                           TextAlignment="Right"
+                                           Text="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuScale, StringFormat={}{0:P0}}" />
+                                <Slider x:Name="sldStartMenuScale"
+                                        VerticalAlignment="Center"
+                                        Minimum="1"
+                                        Maximum="2"
+                                        TickFrequency="0.05"
+                                        IsSnapToTickEnabled="True"
+                                        SmallChange="0.05"
+                                        LargeChange="0.25"
+                                        Value="{Binding Source={x:Static Settings:Settings.Instance}, Path=StartMenuScale, UpdateSourceTrigger=PropertyChanged}" />
                             </DockPanel>
                         </StackPanel>
                     </GroupBox>

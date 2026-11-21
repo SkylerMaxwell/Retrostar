@@ -528,7 +528,7 @@ namespace RetroBar
             {
                 PeekDuringAutoHide();
             }
-            else if (e.PropertyName == nameof(Settings.AllowBlurBehind) || e.PropertyName == nameof(Settings.AeroGlassTransparency))
+            else if (e.PropertyName == nameof(Settings.AllowBlurBehind) || e.PropertyName == nameof(Settings.AeroGlassTransparency) || e.PropertyName == nameof(Settings.AeroGlassBlur))
             {
                 UpdateBlur();
             }
@@ -675,6 +675,9 @@ namespace RetroBar
             if (AllowClose)
             {
                 QuickLaunchToolbar.Visibility = Visibility.Collapsed;
+
+                _blurBackdrop?.Dispose();
+                _blurBackdrop = null;
 
                 Settings.Instance.PropertyChanged -= Settings_PropertyChanged;
                 _startMenuMonitor.StartMenuVisibilityChanged -= StartMenuMonitor_StartMenuVisibilityChanged;
@@ -1038,7 +1041,19 @@ namespace RetroBar
             {
                 AeroGlassHelper.PrepareGlassWindow(Handle);
             }
+
+            // The adjustable blur beneath the glass (GlassBlurBackdrop); created the first time it is needed
+            double blur = glass && AllowsTransparency ? AeroGlassHelper.BlurStrength : 0;
+
+            if (blur > 0 && _blurBackdrop == null && Handle != IntPtr.Zero)
+            {
+                _blurBackdrop = new GlassBlurBackdrop(Handle);
+            }
+
+            _blurBackdrop?.SetStrength(blur);
         }
+
+        private GlassBlurBackdrop _blurBackdrop;
 
         #region Unlocked taskbar drag hook
         private void Taskbar_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -3729,6 +3744,23 @@ namespace RetroBar.Controls
 
             Left = -32000;
             Top = -32000;
+
+            Closed += (sender, e) => _blurBackdrop?.Dispose();
+        }
+
+        private GlassBlurBackdrop _blurBackdrop;
+
+        /// <summary>The adjustable blur beneath the list's glass (GlassBlurBackdrop), at the Aero glass blur setting.</summary>
+        private void UpdateGlassBlur()
+        {
+            double blur = IsGlass ? AeroGlassHelper.BlurStrength : 0;
+
+            if (blur > 0 && _blurBackdrop == null && _handle != IntPtr.Zero)
+            {
+                _blurBackdrop = new GlassBlurBackdrop(_handle);
+            }
+
+            _blurBackdrop?.SetStrength(blur);
         }
 
         private void Window_SourceInitialized(object sender, EventArgs e)
@@ -3829,6 +3861,8 @@ namespace RetroBar.Controls
             {
                 AeroGlassHelper.PrepareGlassWindow(_handle);
             }
+
+            UpdateGlassBlur();
 
             if (_thumbnails)
             {
@@ -7946,10 +7980,12 @@ namespace RetroBar.Converters
     {
         public object Convert(object[] values, Type targetType, object parameter, System.Globalization.CultureInfo culture)
         {
-            if (values[0] is double scale && values[1] is bool smoothing)
+            if (values[0] is double scale && values[1] is bool)
             {
-                bool disableDisplayFormatting = scale > 1 && smoothing;
-                return disableDisplayFormatting ? TextFormattingMode.Ideal : TextFormattingMode.Display;
+                // Display formatting snaps glyphs to the pixel grid at the unscaled size, so any scale transform then
+                // stretches already-snapped glyphs: blurred, clipped text. Scaled, text is laid out at its final size
+                // (Ideal), with or without font smoothing; font smoothing itself is TextRenderingMode's
+                return Math.Abs(scale - 1.0) > 0.001 ? TextFormattingMode.Ideal : TextFormattingMode.Display;
             }
 
             return Binding.DoNothing;
@@ -8357,20 +8393,26 @@ namespace RetroBar.StartMenu
         private AppCatalogSnapshot _catalog;
         private CancellationTokenSource _searchCancellation;
         private readonly DispatcherTimer _fileSearchTimer;
+        private StartMenuEntry _defaultResult;
         private ImageSource _userPicture;
         private readonly UserPictureWindow _pictureWindow;
         private bool _pictureWindowClosed;
         private int _menuX;
         private int _menuY;
 
-        // The user picture's top-left corner relative to the menu's, in device-independent pixels:
-        // centred over the right column and overhanging the top edge by 25 px, as measured in Vista
-        private const double VistaPictureOffsetX = 304;
-        private const double VistaPictureOffsetY = -25;
+        // The user picture's top-left corner relative to the menu's, in device-independent pixels. In Vista it sits
+        // inside the frame, at the top of the right column level with the programs pane, as measured in Vista
+        private const double VistaPictureOffsetX = 305;
+        private const double VistaPictureOffsetY = 6;
 
         // Windows 7's frame is 6 px wider and its picture overhangs by 24 px, as measured in Windows 7
         private const double Windows7PictureOffsetX = 308;
         private const double Windows7PictureOffsetY = -24;
+
+        /// <summary>The Start menu scale setting (1 to 2): the whole menu, its picture and its rounded clip follow it.</summary>
+        private static double MenuScale => Math.Clamp(Settings.Instance.StartMenuScale, 1.0, 2.0);
+
+        private static bool IsMenuScaled => Math.Abs(MenuScale - 1.0) > 0.001;
 
         private double PictureOffsetX => IsWindows7 ? Windows7PictureOffsetX : VistaPictureOffsetX;
         private double PictureOffsetY => IsWindows7 ? Windows7PictureOffsetY : VistaPictureOffsetY;
@@ -8390,6 +8432,8 @@ namespace RetroBar.StartMenu
 
             Left = -32000;
             Top = -32000;
+
+            SearchBox.IsKeyboardFocusWithinChanged += (sender, e) => UpdateDefaultResult();
 
             _pictureWindow = new UserPictureWindow();
             _pictureWindow.PictureClicked += PictureWindow_PictureClicked;
@@ -8460,6 +8504,8 @@ namespace RetroBar.StartMenu
         private void Window_Closed(object sender, EventArgs e)
         {
             _pictureWindow.PictureClicked -= PictureWindow_PictureClicked;
+            _blurBackdrop?.Dispose();
+            _blurBackdrop = null;
 
             // WPF closes owned windows along with their owner; close it here only if that has not happened
             if (!_pictureWindowClosed)
@@ -8479,7 +8525,7 @@ namespace RetroBar.StartMenu
             // The menu always opens with the framed picture, whatever was hovered when it last closed
             _pictureWindow.ShowPicture(false);
 
-            double scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+            double scale = VisualTreeHelper.GetDpi(this).DpiScaleX * MenuScale;
             _pictureWindow.ShowAt(_menuX + (int)Math.Round(PictureOffsetX * scale), _menuY + (int)Math.Round(PictureOffsetY * scale));
         }
 
@@ -8636,7 +8682,7 @@ namespace RetroBar.StartMenu
             }
 
             double scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
-            IntPtr frameRegion = CreateRoundRegion(Frame, 6, scale);
+            IntPtr frameRegion = CreateRoundRegion(Frame, 6 * MenuScale, scale);
 
             if (frameRegion == IntPtr.Zero)
             {
@@ -8657,11 +8703,12 @@ namespace RetroBar.StartMenu
                 return IntPtr.Zero;
             }
 
-            Point topLeft = element.TranslatePoint(new Point(0, 0), this);
-            int left = (int)Math.Round(topLeft.X * scale);
-            int top = (int)Math.Round(topLeft.Y * scale);
-            int right = (int)Math.Round((topLeft.X + element.ActualWidth) * scale);
-            int bottom = (int)Math.Round((topLeft.Y + element.ActualHeight) * scale);
+            // Bounds in the window's coordinates, so a scaled frame gives a scaled region
+            Rect bounds = element.TransformToAncestor(this).TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
+            int left = (int)Math.Round(bounds.Left * scale);
+            int top = (int)Math.Round(bounds.Top * scale);
+            int right = (int)Math.Round(bounds.Right * scale);
+            int bottom = (int)Math.Round(bounds.Bottom * scale);
             int diameter = (int)Math.Round(radius * 2 * scale);
 
             return StartMenuNative.CreateRoundRectRgn(left, top, right + 1, bottom + 1, diameter, diameter);
@@ -8675,7 +8722,19 @@ namespace RetroBar.StartMenu
             {
                 AeroGlassHelper.PrepareGlassWindow(_handle);
             }
+
+            // The adjustable blur beneath the glass (GlassBlurBackdrop), shaped like the menu's rounded frame
+            double blur = IsGlass ? AeroGlassHelper.BlurStrength : 0;
+
+            if (blur > 0 && _blurBackdrop == null && _handle != IntPtr.Zero)
+            {
+                _blurBackdrop = new GlassBlurBackdrop(_handle);
+            }
+
+            _blurBackdrop?.SetStrength(blur);
         }
+
+        private GlassBlurBackdrop _blurBackdrop;
 
         #endregion
 
@@ -8686,6 +8745,7 @@ namespace RetroBar.StartMenu
             IsGlass = Settings.Instance.EnableAeroGlass;
             IsWindows7 = Settings.Instance.StartMenuStyle == StartMenuStyleOption.Windows7;
             ApplyLayout();
+            ApplyScale();
 
             bool largeIcons = Settings.Instance.StartMenuLargeIcons;
             ProgramIconSize = largeIcons ? 32 : 16;
@@ -8703,21 +8763,14 @@ namespace RetroBar.StartMenu
                 };
             }
 
-            switch (Settings.Instance.StartMenuPowerButtonAction)
+            // The power button is red whatever it does; the tooltip names the action
+            PowerButton.Background = (Brush)FindResource("PowerShutDownBackground");
+            PowerButton.ToolTip = Settings.Instance.StartMenuPowerButtonAction switch
             {
-                case StartMenuPowerAction.ShutDown:
-                    PowerButton.Background = (Brush)FindResource("PowerShutDownBackground");
-                    PowerButton.ToolTip = FindString("start_menu_shut_down", "Shut Down");
-                    break;
-                case StartMenuPowerAction.Hibernate:
-                    PowerButton.Background = (Brush)FindResource("PowerSleepBackground");
-                    PowerButton.ToolTip = FindString("start_menu_hibernate", "Hibernate");
-                    break;
-                default:
-                    PowerButton.Background = (Brush)FindResource("PowerSleepBackground");
-                    PowerButton.ToolTip = FindString("start_menu_sleep", "Sleep");
-                    break;
-            }
+                StartMenuPowerAction.ShutDown => FindString("start_menu_shut_down", "Shut Down"),
+                StartMenuPowerAction.Hibernate => FindString("start_menu_hibernate", "Hibernate"),
+                _ => FindString("start_menu_sleep", "Sleep")
+            };
 
             LockButton.ToolTip = FindString("start_menu_lock", "Lock");
 
@@ -8735,14 +8788,18 @@ namespace RetroBar.StartMenu
             bool glass = IsGlass;
 
             Frame.Width = win7 ? 411 : 405;
-            Frame.Height = win7 ? 476 : 508;
+            // Vista's frame is 30 px taller than Windows 7's measure suggests, for the picture inside it above the right column
+            Frame.Height = win7 ? 476 : 538;
             FrameHighlight.BorderBrush = new SolidColorBrush(win7 ? (glass ? Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF)) : Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF));
 
-            LeftPane.Height = win7 ? 462 : 464;
+            LeftPane.Height = win7 ? 462 : 494;
             LeftPane.Margin = win7 ? new Thickness(6, 6, 0, 6) : new Thickness(6, 6, 0, 0);
             LeftPane.BorderBrush = new SolidColorBrush(win7 ? (glass ? Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xFF, 0xF4, 0xF8, 0xFC)) : Color.FromArgb(0xFF, 0xA0, 0xA2, 0x9E));
             LeftPaneInner.BorderBrush = new SolidColorBrush(win7 ? (glass ? Color.FromArgb(0xCC, 0x3A, 0x4E, 0x58) : Color.FromArgb(0xFF, 0x7F, 0x93, 0xAB)) : Color.FromArgb(0xFF, 0x3A, 0x3B, 0x38));
-            LeftListRow.Height = new GridLength(win7 ? 381 : 429);
+            LeftListRow.Height = new GridLength(win7 ? 381 : 459);
+
+            // Vista's first link is centred 90 px below the frame's top, under the picture; Windows 7's picture overhangs
+            RightColumn.Margin = win7 ? new Thickness(3, 43, 6, 0) : new Thickness(3, 73, 6, 0);
 
             AllProgramsButton.Margin = win7 ? new Thickness(0, 3, 0, 3) : new Thickness(0, 3, 0, 0);
             AllProgramsText.FontWeight = win7 ? FontWeights.Normal : FontWeights.Bold;
@@ -8772,6 +8829,19 @@ namespace RetroBar.StartMenu
 
             PowerStrip.Visibility = win7 ? Visibility.Collapsed : Visibility.Visible;
             ShutDownGroup.Visibility = win7 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        /// <summary>
+        /// Zooms the whole menu by the Start menu scale. Scaled, text is laid out at its final size (Ideal formatting)
+        /// so it stays sharp; at 100% it keeps the pixel-grid formatting (Display) the menu was measured with.
+        /// </summary>
+        private void ApplyScale()
+        {
+            double menuScale = MenuScale;
+
+            Frame.LayoutTransform = IsMenuScaled ? new ScaleTransform(menuScale, menuScale) : Transform.Identity;
+            TextOptions.SetTextFormattingMode(this, IsMenuScaled ? TextFormattingMode.Ideal : TextFormattingMode.Display);
+            _pictureWindow.SetScale(menuScale);
         }
 
         public void ApplyCatalog(AppCatalogSnapshot catalog)
@@ -9312,6 +9382,36 @@ namespace RetroBar.StartMenu
             {
                 AllProgramsView.ScrollToTop();
             }
+
+            UpdateDefaultResult();
+        }
+
+        /// <summary>
+        /// Highlights the result Enter opens: the first program, or else the first file, while the search box has the
+        /// keyboard. Arrowing into the results moves the highlight to the focused item instead.
+        /// </summary>
+        private void UpdateDefaultResult()
+        {
+            StartMenuEntry next = _view == MenuView.Search && SearchBox.IsKeyboardFocusWithin
+                ? SearchPrograms.FirstOrDefault() ?? SearchFiles.FirstOrDefault()
+                : null;
+
+            if (next == _defaultResult)
+            {
+                return;
+            }
+
+            if (_defaultResult != null)
+            {
+                _defaultResult.IsDefaultResult = false;
+            }
+
+            _defaultResult = next;
+
+            if (_defaultResult != null)
+            {
+                _defaultResult.IsDefaultResult = true;
+            }
         }
 
         private void AllProgramsButton_Click(object sender, RoutedEventArgs e)
@@ -9368,6 +9468,7 @@ namespace RetroBar.StartMenu
             UpdateProgramResults(text);
             SearchFiles.Clear();
             UpdateResultHeaders(Settings.Instance.StartMenuSearchFiles);
+            UpdateDefaultResult();
 
             if (Settings.Instance.StartMenuSearchFiles)
             {
@@ -9449,6 +9550,7 @@ namespace RetroBar.StartMenu
                 }
 
                 ReplaceItems(SearchFiles, files);
+                UpdateDefaultResult();
             }
             catch (OperationCanceledException)
             {
@@ -9960,6 +10062,15 @@ namespace RetroBar.StartMenu
 
             Left = -32000;
             Top = -32000;
+        }
+
+        /// <summary>Zooms the picture and the item icons with the Start menu; text-free, so only the transform changes.</summary>
+        public void SetScale(double scale)
+        {
+            if (Content is FrameworkElement root)
+            {
+                root.LayoutTransform = Math.Abs(scale - 1.0) > 0.001 ? new ScaleTransform(scale, scale) : Transform.Identity;
+            }
         }
 
         /// <summary>The user picture inside the frame.</summary>

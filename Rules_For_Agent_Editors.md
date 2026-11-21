@@ -121,38 +121,100 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
 - **Aero glass** is one switch, `EnableAeroGlass` (default on). It controls the taskbar and the Start menu together.
   While it is on, glass themes keep their glass when a window is maximized; while it is off they use the opaque
   Basic look (Vista Basic or Windows 7 Basic).
-- The blur is the plain blur-behind accent (`AeroGlassHelper`), not Acrylic, because Vista's glass had no noise or
-  luminosity layer. `AeroGlassHelper` is the only source of glass: ManagedShell's `SetBlur` is always called with
-  `false`, because its blur is Acrylic on Windows 10 and the system backdrop on Windows 11. On Windows 11,
-  `AeroGlassHelper` also turns off the system backdrop, rounded corners and accent border of every glass window.
-  The taskbar applies the glass again after DWM, colour, theme and setting changes.
+- **The glass is Windows' live transparency, with Aero's look and nothing of Windows' own.** Every glass window is a
+  layered window (`AllowsTransparency`), which Windows' compositor draws over whatever is behind it, live: windows,
+  video and the desktop show through as they change. This works on every supported Windows, does not depend on
+  Windows' "Transparency effects" setting, and appears in screenshots and recordings as it is on screen.
+  `AeroGlassHelper.PrepareGlassWindow` switches Windows' own treatments off on every glass window, and is called again
+  after DWM, theme and setting changes: the accent policy is set to disabled (no Windows blur, tint or acrylic), and on
+  Windows 11 the system backdrop (Mica or Acrylic), rounded corners and accent border are turned off. Never turn on
+  any of them, a DWM blur-behind, or Windows' acrylic on a glass window. ManagedShell's `SetBlur` is always called with
+  `false`, because its blur is the accent policy or the system backdrop. Never hide a glass window from capture.
+- The glass window itself has no blur. Its look is the theme's tint, highlights and edges on the window's tint layer,
+  drawn at `AeroGlassHelper.TintOpacity`.
+- **Aero glass blur** (`AeroGlassBlur`, 0-100, default 40, Advanced tab slider under the transparency slider) is the
+  only blur, and it is never on the glass window: `GlassBlurBackdrop` is a separate click-through window with Windows'
+  plain blur-behind (no tint, noise or acrylic), kept directly beneath the glass window with its place, size, region
+  and z-order, and drawn at the setting's opacity (`AeroGlassHelper.BlurStrength`), which blends the sharp and the
+  blurred desktop. At 0, or with see-through glass off, it is hidden and the glass is exactly as without it. Windows 10
+  and later. The taskbar, the Start menu and the Windows 7 window list each own one; a new glass window that should
+  blur owns one too, sets its strength whenever its glass is updated, and disposes it when it closes. A window that
+  changes its region outside a move calls `Sync` (or sets the strength again) afterwards.
+- **Allow see-through glass** (`AllowBlurBehind`, a historical name) applies to every glass surface while Aero glass is
+  on. On, the tint is drawn at `AeroGlassHelper.GlassStrength` (0.6), faded further by the transparency slider, so
+  what is behind shows clearly. Off, the tint is drawn as measured on Vista, near-opaque.
 - **Glass transparency** is one setting, `AeroGlassTransparency` (0-100, default 0, Advanced tab slider), and it
-  governs every glass surface. A glass surface is any window that calls `AeroGlassHelper.SetGlassBlur`, now or in
-  the future. Each one must:
-  - paint its glass tint (the background and outline over the blur) on a dedicated tint layer that holds no content,
+  governs every glass surface: 0% is Aero's look, 100% is clear glass. A glass surface is any window that shows glass,
+  now or in the future. Each one must:
+  - be a layered window and call `AeroGlassHelper.PrepareGlassWindow` whenever its glass is shown;
+  - paint its glass tint (the background and outline of the glass) on a dedicated tint layer that holds no content,
     with the content drawn over it, so only the glass fades and never text, icons or buttons;
   - bind that layer's `Opacity` to its window's `GlassTintOpacity` property;
   - set `GlassTintOpacity` to `AeroGlassHelper.TintOpacity` while its glass is on and to 1 otherwise, so opaque looks
     (Basic, glass off) are never faded.
 
   Today these are the taskbar (`TaskbarTopBorder` layer in the Vista Aero, Longhorn Aero and Windows 7 Aero themes),
-  the Start menu (`FrameTint`) and the Windows 7 window list (`Frame`). A new glass theme follows the same pattern in
-  its `Taskbar` template; never fade a whole window or a layer that holds content.
+  the Start menu (`FrameTint`) and the Windows 7 window list (`Frame`). A new glass theme follows the
+  same pattern in its `Taskbar` template; never fade a whole window or a layer that holds content. The taskbar's tint
+  layer lies under the whole bar alike, Quick Launch and the notification area included; never give part of the bar a
+  background of its own over the glass.
 - The Start menu's glass window is exactly the size of its frame. The user picture is a separate window
-  (`UserPictureWindow`) owned by the menu, so the blur never shows outside the frame. Do not move the picture back into
-  the menu window.
+  (`UserPictureWindow`) owned by the menu, so the glass never shows outside the frame. In Vista the picture sits inside
+  the frame, 6 px below its top edge at the top of the right column, and the right column starts 73 px down, below it
+  (Vista's frame is 538 px tall for that); in Windows 7 it overhangs the top edge (`ApplyLayout`, `PictureOffsetX/Y`).
+  Do not move the picture back into the menu window. While the pointer is over a right-column item, the picture window shows that item's 48 px icon
+  alone, on a transparent background with no frame, as Vista did: the frame and picture fade out as the icon fades in
+  (`ShowItemIcon`), and back when no item is under the pointer (`ShowPicture`). The menu always opens with the picture.
 - The Start orb is raised above the open menu, and a click on the part of the orb that overlaps the menu closes it.
+- **Start menu scale** (`StartMenuScale`, 1-2, Start Menu tab) zooms the whole menu with a layout transform on
+  `Frame` (`ApplyScale`); the window region, the picture window (`UserPictureWindow.SetScale`) and the picture offsets
+  follow it. Any scaled surface uses Ideal text formatting and keeps Display only at exactly 100%, so text is laid out
+  at its final size and stays sharp; the taskbar does the same through `SettingsToTextFormattingModeConverter`.
+- While searching, the first result (the first program, or else the first file) is highlighted while the search box
+  has the keyboard (`StartMenuEntry.IsDefaultResult`, `UpdateDefaultResult`), and Enter opens exactly that result.
+- The Vista power button is red whatever its action (`PowerShutDownBackground`, measured from Vista's power button
+  row by row with the hue turned to red); its tooltip names the action.
+- The Start menu's scrolling lists use the Vista/Windows 7 Aero scrollbar (`FlatScrollViewer`'s scrollbar style in
+  `VistaStartMenu.xaml`); it applies to those ScrollViewers only.
 - Measured Vista geometry and colours in `VistaStartMenu.xaml`, `UserPictureWindow.xaml` and the Vista Aero theme
   come from pixel measurements of Vista screenshots; change them only from new measurements.
-- **Windows 7.** The Windows 7 taskbar is the `Windows 7 Aero` and `Windows 7 Basic` themes. A theme that sets
-  `UseSuperbar` gets the superbar (`SuperbarTaskList`) in place of `TaskList`; every other theme keeps `TaskList`, and
-  only the one shown creates task buttons (`SetActive`). The superbar combines each program's windows into one
+- **Windows 7.** The Windows 7 taskbar is the `Windows 7 Aero` theme only; it shows the opaque Basic look
+  while Aero glass is off, so there is no separate Windows 7 Basic theme (a saved `Windows 7 Basic` setting becomes
+  `Windows 7 Aero` in `Settings.Theme`, and the installer deletes the old file). Until the Windows 7 orb
+  image is supplied, its Start orb is the Windows Vista orb, inherited from `Windows Vista Aero` (its images, size and
+  floating window); do not draw an imitation orb. A theme that sets `UseSuperbar` gets the superbar (`SuperbarTaskList`) in place of `TaskList`; every other theme keeps
+  `TaskList`, and only the one shown creates task buttons (`SetActive`). Under a superbar theme Quick Launch is never
+  shown (`UpdateQuickLaunch`): Windows 7 has none, pinned programs are full-size superbar buttons and a program opens on
+  its pinned button. The `ShowQuickLaunch` setting is kept and applies under every other theme.
+- Vista sounds (`VistaSoundScheme`): the sound scheme is the current user's registry (`HKCU\AppEvents\Schemes\Apps`), so
+  the sounds are only in place while Retrostar runs. Before changing any entry the original entries are written to
+  `%LOCALAPPDATA%\RetroBar\vista-sounds-backup.json` (with the owning process id); `Restore` (on exit, on session end,
+  or when `UseVistaSounds` is turned off), the watchdog process and the next `Apply` all restore from it, under the
+  named mutex. Never change an entry that is not in the backup, never leave the backup out of step with the registry,
+  and keep the watchdog free of windows and settings. A new event goes into the `Map` table with its file in
+  `RetroBar/Resources/Sounds` (the csproj and the installer already copy that folder); events this Windows does not
+  define are skipped. Start up, log on, log off and shut down are not mapped: Windows 8 and later do not play them
+  while a program that started after sign-in is running.
+- Windows 7 input language: Windows 7 Aero hides the toolbar grip (`ToolbarThumb`, which Windows 7 only shows beside
+  the language button since it has no Quick Launch) and centres the language name (`LanguageBar`, `InputLanguage`).
+  Other themes keep theirs.
+- Windows 7 notification area overflow: a theme that sets `UseNotifyIconOverflow` (only `Windows 7 Aero`) shows hidden
+  icons in a flyout above the "show hidden icons" button (`OverflowPopup` in `NotifyIconList.xaml`) instead of expanding
+  them into the bar; the button stays lit while it is open and its arrow never flips. The flyout's structure is the
+  control's; its look is the theme's (`NotifyIconOverflowFrame`, `NotifyIconOverflowItems`, `NotifyIconOverflowCell`,
+  `NotifyIconOverflowCustomize`, `NotifyIconOverflowGap`), with the taskbar as the frame's DataContext so the theme can
+  bind `GlassTintOpacity` and `IsAeroGlassEnabled`. Customize opens Properties at the notification settings
+  (`Taskbar.OpenCustomizeNotifications`). Themes without the key keep the old behaviour unchanged. The superbar combines each program's windows into one
   icon-only button, puts pinned programs first and shows the windows as thumbnails (glass) or as a list (Basic).
   Pins are `TaskbarPinnedItems`, using the Start menu's `file:`/`app:` keys; Windows' own taskbar pins are copied in
   once (`TaskbarPinsImported`) and never written back.
 - The Windows 7 Start menu is the same window as Vista's, laid out by `ApplyLayout` when `StartMenuStyle` is Windows 7.
   `ApplyLayout` sets every value for both styles, so Vista keeps its measured layout exactly; keep it that way.
   Windows 7 has its own power button action (`Windows7PowerButtonAction`, default Shut down).
+- Superbar buttons of programs with more than one window stack as Windows 7 does, inside the same 60 px button: 55 px
+  plus one 5 px edge for two windows, 52 px plus two 4 px edges for three or more. The edges are copies of the button
+  in its current state, clipped to the strip each exposes (`Stack1`, `Stack2` in the `SuperbarButton` template); never
+  give them brushes of their own.
 - Measured Windows 7 geometry and colours in the Windows 7 themes, the superbar templates and the Windows 7 parts of
   `VistaStartMenu.xaml` come from Windows 7 screenshots at 100% scale; change them only from new measurements.
 
@@ -185,13 +247,13 @@ There is no other first-party `.cs` file. Layout and appearance stay in `.xaml` 
 |---|---|
 | A setting or its default | Core `[1100]` `RetroBar/Utilities/Settings.cs`, then its control in `PropertiesWindow.xaml` and its label in `Languages/English.xaml` |
 | Taskbar behaviour (placement, auto-hide, glass, maximized look) | Interface `[5100]` `RetroBar/Taskbar.xaml.cs` |
-| Taskbar appearance | `RetroBar/Themes/<theme>.xaml` (Vista look: `Windows Vista Aero.xaml`; Windows 7: `Windows 7 Aero.xaml`, `Windows 7 Basic.xaml`) |
+| Taskbar appearance | `RetroBar/Themes/<theme>.xaml` (Vista look: `Windows Vista Aero.xaml`; Windows 7: `Windows 7 Aero.xaml`, which uses the Vista Start orb until the Windows 7 orb image is supplied) |
 | Windows 7 taskbar buttons (combining, pinning, window list, reordering) | Interface `[5200]` `SuperbarTaskList.xaml.cs`, `SuperbarButton.xaml.cs`, `SuperbarWindowList.xaml.cs`; pins and grouping in Core `[1700]`; button look in the Windows 7 themes (`SuperbarButton`, `SuperbarButtonBasic`) |
 | Start button and orb | Interface `[5200]` `StartButton.xaml.cs`, `FloatingStartButton.xaml.cs` |
 | Start menu behaviour (views, search UI, pinning, right column, power strip, positioning, Vista or Windows 7 layout) | Interface `[6000]` `RetroBar/StartMenu/VistaStartMenu.xaml.cs` |
 | Start menu look | `RetroBar/StartMenu/VistaStartMenu.xaml`, `RetroBar/StartMenu/UserPictureWindow.xaml` |
 | Programs list, file search, icons, launching, power actions, Windows key | Core `[2000]` START MENU ENGINE |
-| Aero glass blur | Core `[1600]` `AeroGlassHelper.cs`; used by `Taskbar.xaml.cs`, `VistaStartMenu.xaml.cs` and `SuperbarWindowList.xaml.cs` |
+| Aero glass (Windows' live transparency, Windows' own effects off, glass strength) | Core `[1600]` `AeroGlassHelper.cs`; used by `Taskbar.xaml.cs`, `VistaStartMenu.xaml.cs` and `SuperbarWindowList.xaml.cs` (rule 8) |
 | Aero glass transparency (the Advanced tab slider) | Setting `AeroGlassTransparency` in Core `[1100]`; `AeroGlassHelper.TintOpacity`; each glass window's `GlassTintOpacity` and the tint layer bound to it (rule 8) |
 | Properties window tabs | Interface `[5400]` `PropertiesWindow.xaml.cs` with `PropertiesWindow.xaml` |
 | Tray, clock, input language | Interface `[5300]`; helpers in Core `[1500]` |
@@ -242,6 +304,7 @@ Taskbar windows per screen, Explorer, the Windows Start menu, updates, clock fly
 - `RetroBar/Utilities/Updater.cs` — optional update check (off by default)
 - `RetroBar/Utilities/ClockFlyoutLauncher.cs` — opens the Windows clock and calendar flyout
 - `RetroBar/Utilities/VolumeChanger.cs` — system volume changes from the tray
+- `RetroBar/Utilities/VistaSoundScheme.cs` — Windows Vista's sounds while Retrostar runs: points the user's sound scheme at `Resources\Sounds`, backs up and restores the original entries, and the watchdog process (`--restore-vista-sounds <pid>`, handled first in `Program.Main`)
 
 ### [1400] INPUT
 Hotkeys, tray hotkeys, low-level mouse hook, delayed activation.
@@ -260,9 +323,10 @@ Tray icon helpers, drag and drop handlers, Quick Launch sorting.
 - `RetroBar/Utilities/ToolbarSorter.cs` — Quick Launch item order
 
 ### [1600] VISUAL EFFECTS
-Aero glass blur and the icon invert shader.
+Aero glass on Windows' live transparency, and the icon invert shader.
 
-- `RetroBar/Utilities/AeroGlassHelper.cs` — Vista-style blur behind a window (SetWindowCompositionAttribute, plain blur)
+- `RetroBar/Utilities/AeroGlassHelper.cs` — Aero glass: glass strength, tint opacity and blur strength, and Windows' own treatments switched off on glass windows (accent policy, Windows 11 backdrop, corners, border)
+- `RetroBar/Utilities/GlassBlurBackdrop.cs` — the adjustable blur: a click-through blur window kept beneath a glass window, at the Aero glass blur setting's opacity
 - `RetroBar/Utilities/InvertEffect.cs` — pixel shader that inverts tray icons
 
 ### [1700] SUPERBAR
@@ -293,7 +357,7 @@ App lifecycle: startup, theme and language loading, shutdown.
 ### [5100] TASKBAR WINDOW
 The taskbar app bar window.
 
-- `RetroBar/Taskbar.xaml.cs` — Taskbar: app bar placement, auto-hide, Aero glass blur, maximized look, dragging
+- `RetroBar/Taskbar.xaml.cs` — Taskbar: app bar placement, auto-hide, Aero glass, maximized look, dragging
 
 ### [5200] TASKBAR CONTROLS
 Start button, task list, toolbars, Show Desktop.
@@ -358,7 +422,7 @@ IValueConverter classes used from XAML.
 The Vista Start menu and its user picture.
 
 - `RetroBar/StartMenu/VistaStartMenu.xaml.cs` — VistaStartMenu: views, search, pinning, right column, power strip, glass, orb layering; the Windows 7 layout (`ApplyLayout`)
-- `RetroBar/StartMenu/UserPictureWindow.xaml.cs` — user picture frame, a separate unblurred window owned by the menu
+- `RetroBar/StartMenu/UserPictureWindow.xaml.cs` — user picture frame, a separate window owned by the menu; shows the hovered right-column item's icon without the frame
 
 
 ## Files that are not C#

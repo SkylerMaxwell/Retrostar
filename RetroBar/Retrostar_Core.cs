@@ -761,6 +761,14 @@ namespace RetroBar.Utilities
             set => Set(ref _startMenuRecentCount, Math.Clamp(value, 0, 20));
         }
 
+        private double _startMenuScale = 1.0;
+        /// <summary>Zoom of the Vista and Windows 7 Start menus, 1 to 2, like TaskbarScale.</summary>
+        public double StartMenuScale
+        {
+            get => _startMenuScale;
+            set => Set(ref _startMenuScale, value);
+        }
+
         private bool _startMenuLargeIcons = true;
         public bool StartMenuLargeIcons
         {
@@ -974,6 +982,17 @@ namespace RetroBar.Utilities
         {
             get => _aeroGlassTransparency;
             set => Set(ref _aeroGlassTransparency, Math.Clamp(value, 0, 100));
+        }
+
+        private int _aeroGlassBlur = 40;
+        /// <summary>
+        /// Strength of the blur behind see-through glass, from 0 (none: the glass is sharp, as before) to 100 (Windows'
+        /// full blur). Windows 10 and later; GlassBlurBackdrop, through AeroGlassHelper.BlurStrength.
+        /// </summary>
+        public int AeroGlassBlur
+        {
+            get => _aeroGlassBlur;
+            set => Set(ref _aeroGlassBlur, Math.Clamp(value, 0, 100));
         }
 
         private bool _useVistaSounds = true;
@@ -3989,6 +4008,14 @@ namespace RetroBar.Utilities
             : 1.0;
 
         /// <summary>
+        /// Strength of the blur behind see-through glass, 0 to 1 (GlassBlurBackdrop): the Aero glass blur setting while
+        /// the glass is see-through, otherwise 0.
+        /// </summary>
+        public static double BlurStrength => IsSeeThrough
+            ? Math.Clamp(Settings.Instance.AeroGlassBlur, 0, 100) / 100.0
+            : 0.0;
+
+        /// <summary>
         /// Makes sure Windows draws nothing of its own on a glass window, so only the live transparency and the
         /// theme's Aero look show. Call whenever the glass is shown, and again after DWM, theme and setting changes,
         /// which can bring Windows' treatments back.
@@ -4063,6 +4090,338 @@ namespace RetroBar.Utilities
     }
 }
 // <RETROSTAR_SOURCE_END path="RetroBar/Utilities/AeroGlassHelper.cs">
+
+// <RETROSTAR_SOURCE_BEGIN path="RetroBar/Utilities/GlassBlurBackdrop.cs">
+namespace RetroBar.Utilities
+{
+    using ManagedShell.Common.Logging;
+    using System;
+    using System.Runtime.InteropServices;
+    using System.Windows.Interop;
+
+    /// <summary>
+    /// The adjustable blur behind Aero glass (the "Aero glass blur" setting, Windows 10 and later).
+    ///
+    /// Windows' only live blur of what is behind a window is its plain blur-behind (the accent policy's
+    /// ACCENT_ENABLE_BLURBEHIND: a blur with no tint, noise or acrylic), and it has no strength. So the blur is a window
+    /// of its own: a click-through, never-activated window with that blur, kept directly beneath a glass window, at the
+    /// same place and size and with the same shape (window region). Its opacity is the strength: 0 shows the sharp
+    /// desktop, 1 the full blur, and values between blend the two. The glass window above is unchanged, so its theme
+    /// tint and live transparency draw over the blur exactly as before. At strength 0 the window is hidden, so the glass
+    /// is then exactly Retrostar's see-through glass.
+    ///
+    /// The glass window's messages are watched, so the blur follows it as it moves, resizes, shows, hides and changes
+    /// place in the z-order; Sync covers changes Windows does not report as a move (a new window region).
+    /// </summary>
+    internal sealed class GlassBlurBackdrop : IDisposable
+    {
+        private const string ClassName = "RetrostarGlassBlur";
+
+        private const int WS_POPUP = unchecked((int)0x80000000);
+        private const int WS_EX_TOPMOST = 0x00000008;
+        private const int WS_EX_TRANSPARENT = 0x00000020;
+        private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const int WS_EX_LAYERED = 0x00080000;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
+        private const int GWL_EXSTYLE = -20;
+        private const int LWA_ALPHA = 0x2;
+        private const int SW_HIDE = 0;
+        private const uint SWP_NOACTIVATE = 0x0010;
+        private const uint SWP_SHOWWINDOW = 0x0040;
+        private const uint SWP_NOOWNERZORDER = 0x0200;
+        private const int WM_WINDOWPOSCHANGED = 0x0047;
+        private const int BLACK_BRUSH = 4;
+        private const int ERROR_REGION = 0;
+        private const int DWMWA_TRANSITIONS_FORCEDISABLED = 3;
+        private const int DWMWA_EXCLUDED_FROM_PEEK = 12;
+        private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+        private const int DWMWCP_DONOTROUND = 1;
+        private const int ACCENT_ENABLE_BLURBEHIND = 3;
+        private const int WCA_ACCENT_POLICY = 19;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT
+        {
+            public int Left, Top, Right, Bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct WNDCLASSEX
+        {
+            public int cbSize;
+            public int style;
+            public WndProc lpfnWndProc;
+            public int cbClsExtra;
+            public int cbWndExtra;
+            public IntPtr hInstance;
+            public IntPtr hIcon;
+            public IntPtr hCursor;
+            public IntPtr hbrBackground;
+            public string lpszMenuName;
+            public string lpszClassName;
+            public IntPtr hIconSm;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct AccentPolicy
+        {
+            public int AccentState;
+            public int AccentFlags;
+            public int GradientColor;
+            public int AnimationId;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WindowCompositionAttributeData
+        {
+            public int Attribute;
+            public IntPtr Data;
+            public int SizeOfData;
+        }
+
+        private delegate IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern ushort RegisterClassEx(ref WNDCLASSEX wc);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateWindowEx(int exStyle, string className, string windowName, int style, int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr DefWindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool DestroyWindow(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetLayeredWindowAttributes(IntPtr hwnd, uint key, byte alpha, int flags);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hwnd, IntPtr insertAfter, int x, int y, int width, int height, uint flags);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hwnd, int command);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+
+        [DllImport("user32.dll")]
+        private static extern int GetWindowLong(IntPtr hwnd, int index);
+
+        [DllImport("user32.dll")]
+        private static extern int GetWindowRgn(IntPtr hwnd, IntPtr region);
+
+        [DllImport("user32.dll")]
+        private static extern int SetWindowRgn(IntPtr hwnd, IntPtr region, bool redraw);
+
+        [DllImport("user32.dll")]
+        private static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
+
+        [DllImport("gdi32.dll")]
+        private static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
+
+        [DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr handle);
+
+        [DllImport("gdi32.dll")]
+        private static extern IntPtr GetStockObject(int index);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr GetModuleHandle(string moduleName);
+
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+        // Kept for the life of the process: Windows calls it for every blur window
+        private static readonly WndProc ClassProc = DefWindowProc;
+        private static bool _classRegistered;
+
+        private readonly IntPtr _owner;
+        private readonly HwndSource _ownerSource;
+        private IntPtr _hwnd;
+        private double _strength;
+        private bool _disposed;
+
+        /// <summary>Whether this Windows has the blur (Windows 10 and later).</summary>
+        public static bool IsSupported => Environment.OSVersion.Version.Major >= 10;
+
+        /// <param name="owner">The glass window the blur stays beneath.</param>
+        public GlassBlurBackdrop(IntPtr owner)
+        {
+            _owner = owner;
+            _ownerSource = HwndSource.FromHwnd(owner);
+            _ownerSource?.AddHook(OwnerHook);
+        }
+
+        /// <summary>
+        /// Sets the blur's strength, 0 to 1, and brings it in step with the glass window. 0 hides it.
+        /// </summary>
+        public void SetStrength(double strength)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _strength = IsSupported ? Math.Clamp(strength, 0, 1) : 0;
+
+            if (_strength > 0 && _hwnd == IntPtr.Zero)
+            {
+                Create();
+            }
+
+            Sync();
+        }
+
+        /// <summary>Brings the blur in step with the glass window: place, size, shape, visibility and z-order.</summary>
+        public void Sync()
+        {
+            if (_hwnd == IntPtr.Zero)
+            {
+                return;
+            }
+
+            if (_strength <= 0 || !IsWindowVisible(_owner) || IsIconic(_owner) || !GetWindowRect(_owner, out RECT rect))
+            {
+                ShowWindow(_hwnd, SW_HIDE);
+                return;
+            }
+
+            CopyOwnerRegion();
+            SetLayeredWindowAttributes(_hwnd, 0, (byte)Math.Round(_strength * 255), LWA_ALPHA);
+
+            // Directly beneath the glass window, so nothing comes between them
+            SetWindowPos(_hwnd, _owner, rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _ownerSource?.RemoveHook(OwnerHook);
+
+            if (_hwnd != IntPtr.Zero)
+            {
+                DestroyWindow(_hwnd);
+                _hwnd = IntPtr.Zero;
+            }
+        }
+
+        private IntPtr OwnerHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (msg == WM_WINDOWPOSCHANGED && _hwnd != IntPtr.Zero)
+            {
+                Sync();
+            }
+
+            return IntPtr.Zero;
+        }
+
+        private void Create()
+        {
+            try
+            {
+                IntPtr instance = GetModuleHandle(null);
+
+                if (!_classRegistered)
+                {
+                    var windowClass = new WNDCLASSEX
+                    {
+                        cbSize = Marshal.SizeOf<WNDCLASSEX>(),
+                        lpfnWndProc = ClassProc,
+                        hInstance = instance,
+                        // Black is drawn with zero alpha, so the blur shows through the whole window
+                        hbrBackground = GetStockObject(BLACK_BRUSH),
+                        lpszClassName = ClassName
+                    };
+
+                    RegisterClassEx(ref windowClass);
+                    _classRegistered = true;
+                }
+
+                bool topmost = (GetWindowLong(_owner, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+                int exStyle = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | (topmost ? WS_EX_TOPMOST : 0);
+
+                _hwnd = CreateWindowEx(exStyle, ClassName, string.Empty, WS_POPUP, 0, 0, 0, 0, IntPtr.Zero, IntPtr.Zero, instance, IntPtr.Zero);
+
+                if (_hwnd == IntPtr.Zero)
+                {
+                    ShellLogger.Error($"GlassBlurBackdrop: the blur window could not be created ({Marshal.GetLastWin32Error()})");
+                    return;
+                }
+
+                SetDwmAttribute(DWMWA_TRANSITIONS_FORCEDISABLED, 1);
+                SetDwmAttribute(DWMWA_EXCLUDED_FROM_PEEK, 1);
+                SetDwmAttribute(DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND);
+                EnableBlur();
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"GlassBlurBackdrop: {e.Message}");
+                _hwnd = IntPtr.Zero;
+            }
+        }
+
+        private void EnableBlur()
+        {
+            var accent = new AccentPolicy { AccentState = ACCENT_ENABLE_BLURBEHIND };
+            int size = Marshal.SizeOf(accent);
+            IntPtr pointer = Marshal.AllocHGlobal(size);
+
+            try
+            {
+                Marshal.StructureToPtr(accent, pointer, false);
+                var data = new WindowCompositionAttributeData { Attribute = WCA_ACCENT_POLICY, Data = pointer, SizeOfData = size };
+                SetWindowCompositionAttribute(_hwnd, ref data);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
+        }
+
+        private void CopyOwnerRegion()
+        {
+            IntPtr region = CreateRectRgn(0, 0, 0, 0);
+
+            if (GetWindowRgn(_owner, region) == ERROR_REGION)
+            {
+                // The glass window has no region: the blur is its whole rectangle
+                DeleteObject(region);
+                SetWindowRgn(_hwnd, IntPtr.Zero, false);
+            }
+            else if (SetWindowRgn(_hwnd, region, false) == 0)
+            {
+                // On success the system owns the region
+                DeleteObject(region);
+            }
+        }
+
+        private void SetDwmAttribute(int attribute, int value)
+        {
+            try
+            {
+                DwmSetWindowAttribute(_hwnd, attribute, ref value, sizeof(int));
+            }
+            catch (Exception)
+            {
+                // Attributes this Windows does not have are simply not set
+            }
+        }
+    }
+}
+// <RETROSTAR_SOURCE_END path="RetroBar/Utilities/GlassBlurBackdrop.cs">
 
 // <RETROSTAR_SOURCE_BEGIN path="RetroBar/Utilities/InvertEffect.cs">
 namespace RetroBar.Utilities
@@ -5619,6 +5978,23 @@ namespace RetroBar.StartMenu
                 if (_isExpanded != value)
                 {
                     _isExpanded = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        private bool _isDefaultResult;
+        /// <summary>
+        /// The search result that Enter opens, highlighted while the search box has the keyboard (VistaStartMenu).
+        /// </summary>
+        public bool IsDefaultResult
+        {
+            get => _isDefaultResult;
+            set
+            {
+                if (_isDefaultResult != value)
+                {
+                    _isDefaultResult = value;
                     OnPropertyChanged();
                 }
             }
