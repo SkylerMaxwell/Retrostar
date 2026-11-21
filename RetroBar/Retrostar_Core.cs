@@ -3408,7 +3408,7 @@ namespace RetroBar.Utilities
 }
 // <RETROSTAR_SOURCE_END path="RetroBar/Utilities/ToolbarSorter.cs">
 
-// [1600] VISUAL EFFECTS :: Retrostar's own Aero glass, the desktop background behind it, and the icon invert shader
+// [1600] VISUAL EFFECTS :: Aero glass on Windows' live transparency, and the icon invert shader
 
 // <RETROSTAR_SOURCE_BEGIN path="RetroBar/Utilities/AeroGlassHelper.cs">
 namespace RetroBar.Utilities
@@ -3416,1317 +3416,162 @@ namespace RetroBar.Utilities
     using ManagedShell.Common.Logging;
     using System;
     using System.Runtime.InteropServices;
-    using System.Windows;
-    using System.Windows.Controls;
-    using System.Windows.Media;
-    using System.Windows.Media.Imaging;
 
     /// <summary>
-    /// Retrostar's own Aero glass. No Windows transparency effect is used anywhere: no accent policy, no DWM
-    /// blur-behind, no system backdrop (Mica or Acrylic). Each glass window paints its own glass as ordinary pixels:
-    /// a picture of what is behind it, blurred here the way Vista's and Windows 7's glass was, with the theme's tint
-    /// drawn over it by the window itself. Because the glass is ordinary pixels it does not depend on Windows'
-    /// "Transparency effects" setting, and it appears in screenshots and recordings exactly as it is on screen.
+    /// Retrostar's Aero glass on Windows' own live transparency.
     ///
-    /// What is behind a window comes from one of two places (see Rules_For_Agent_Editors.md, rule 8):
-    /// - the screen, read just before the window is shown (CaptureScreen), for windows that appear on demand: the
-    ///   Start menu, the Windows 7 window list, and an auto-hidden taskbar as it slides in. The window is not on the
-    ///   screen when it is read, so its glass can never contain itself;
-    /// - the desktop background, drawn the way Windows draws it (DesktopWallpaper, WallpaperGlass), for the docked
-    ///   taskbar, which always sits over the desktop background.
+    /// Every glass window is a layered window (AllowsTransparency), which Windows' compositor draws over whatever is
+    /// behind it, live: windows, video and the desktop show through as they change. That transparency is the glass. It
+    /// is part of every supported Windows, does not depend on the "Transparency effects" setting, and appears in
+    /// screenshots and recordings as it does on screen.
+    ///
+    /// Windows' own treatments are switched off on every glass window, so only Aero's look is drawn: no blur or tint
+    /// from the accent policy (Windows 10 and 11), no system backdrop (Mica or Acrylic), no rounded corners and no
+    /// accent-coloured border (Windows 11). ManagedShell's own blur is the accent policy or the system backdrop, so it
+    /// is never used. The look is the theme's: its glass tint, highlights and edges on a tint layer that the window
+    /// draws at TintOpacity (see Rules_For_Agent_Editors.md, rule 8).
     /// </summary>
     internal static class AeroGlassHelper
     {
-        // Radius of each box blur, in device-independent pixels. Three passes approximate a Gaussian blur with a
-        // standard deviation of about 3.5 px: shapes behind the glass stay recognisable, as they did in Vista.
-        private const double BlurRadius = 3;
-        private const int BlurPasses = 3;
+        /// <summary>
+        /// How strongly the theme's glass tint is drawn over what is behind it while the glass is see-through, before
+        /// the Aero glass transparency setting. The tints in the themes are as measured on Vista, near-opaque; at this
+        /// strength the taskbar's darkest band is about half opaque, so what is behind the glass shows clearly.
+        /// </summary>
+        public const double GlassStrength = 0.6;
+
+        private enum AccentState
+        {
+            ACCENT_DISABLED = 0
+        }
+
+        private enum WindowCompositionAttribute
+        {
+            WCA_ACCENT_POLICY = 19
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct AccentPolicy
+        {
+            public AccentState AccentState;
+            public int AccentFlags;
+            public int GradientColor;
+            public int AnimationId;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WindowCompositionAttributeData
+        {
+            public WindowCompositionAttribute Attribute;
+            public IntPtr Data;
+            public int SizeOfData;
+        }
+
+        [DllImport("user32.dll")]
+        private static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
+
+        [DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+        // Windows 11 window attributes (dwmapi.h)
+        private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+        private const int DWMWA_BORDER_COLOR = 34;
+        private const int DWMWA_SYSTEMBACKDROP_TYPE = 38;
+        private const int DWMWA_MICA_EFFECT = 1029; // Windows 11 21H2, before DWMWA_SYSTEMBACKDROP_TYPE
+        private const int DWMWCP_DONOTROUND = 1;
+        private const int DWMSBT_NONE = 1;
+        private const uint DWMWA_COLOR_NONE = 0xFFFFFFFE;
+        private const int Windows10Major = 10;
         private const int Windows11Build = 22000;
 
-        /// <summary>
-        /// Opacity of the tint every glass surface paints over the blur, set by the Aero glass transparency slider:
-        /// 1 is the tint as each theme was measured, 0 leaves the blur alone. A surface uses it only while its glass is
-        /// shown (GlassSurface); see Rules_For_Agent_Editors.md, rule 8.
-        /// </summary>
-        public static double TintOpacity => 1.0 - Math.Clamp(Settings.Instance.AeroGlassTransparency, 0, 100) / 100.0;
-
-        /// <summary>Radius of each blur pass, in device pixels, for a window at the given DPI scale.</summary>
-        public static int GetBlurRadius(double dpiScale)
-        {
-            if (double.IsNaN(dpiScale) || dpiScale <= 0)
-            {
-                dpiScale = 1;
-            }
-
-            return Math.Max(1, (int)Math.Round(BlurRadius * dpiScale));
-        }
-
-        /// <summary>How far past a window's edges the blur reads, in device pixels.</summary>
-        public static int GetBlurReach(double dpiScale)
-        {
-            return GetBlurRadius(dpiScale) * BlurPasses;
-        }
+        /// <summary>Whether glass shows what is behind it: Aero glass and "Allow see-through glass" are both on.</summary>
+        public static bool IsSeeThrough => Settings.Instance.EnableAeroGlass && Settings.Instance.AllowBlurBehind;
 
         /// <summary>
-        /// Turns off Windows 11's rounded corners, accent border and system backdrop on a glass window, so none of
-        /// Windows 11's own treatment is ever drawn with the glass. Earlier versions of Windows have none of these.
+        /// Opacity of the tint every glass surface draws over what is behind it, through its window's GlassTintOpacity
+        /// property, while its glass is on. See-through glass: GlassStrength, faded further by the Aero glass
+        /// transparency slider (0% is Aero's look, 100% is clear glass). Otherwise 1: the theme's tint as measured,
+        /// which hides what is behind. Opaque looks (Basic, glass off) always use 1.
         /// </summary>
-        public static void PrepareWindow(IntPtr hwnd)
+        public static double TintOpacity => IsSeeThrough
+            ? GlassStrength * (1.0 - Math.Clamp(Settings.Instance.AeroGlassTransparency, 0, 100) / 100.0)
+            : 1.0;
+
+        /// <summary>
+        /// Makes sure Windows draws nothing of its own on a glass window, so only the live transparency and the
+        /// theme's Aero look show. Call whenever the glass is shown, and again after DWM, theme and setting changes,
+        /// which can bring Windows' treatments back.
+        /// </summary>
+        public static void PrepareGlassWindow(IntPtr hwnd)
         {
-            if (hwnd == IntPtr.Zero || Environment.OSVersion.Version.Build < Windows11Build)
+            if (hwnd == IntPtr.Zero)
             {
                 return;
             }
 
-            // Each attribute exists on some Windows 11 versions only; one that is not supported is simply refused
-            SetAttribute(hwnd, Native.DWMWA_SYSTEMBACKDROP_TYPE, Native.DWMSBT_NONE);
-            SetAttribute(hwnd, Native.DWMWA_MICA_EFFECT, 0);
-            SetAttribute(hwnd, Native.DWMWA_WINDOW_CORNER_PREFERENCE, Native.DWMWCP_DONOTROUND);
-            SetAttribute(hwnd, Native.DWMWA_BORDER_COLOR, unchecked((int)Native.DWMWA_COLOR_NONE));
+            if (Environment.OSVersion.Version.Major >= Windows10Major)
+            {
+                DisableAccent(hwnd);
+            }
+
+            if (Environment.OSVersion.Version.Build >= Windows11Build)
+            {
+                // Each attribute exists on some Windows 11 versions only; one that is not supported is simply refused
+                SetAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_NONE);
+                SetAttribute(hwnd, DWMWA_MICA_EFFECT, 0);
+                SetAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND);
+                SetAttribute(hwnd, DWMWA_BORDER_COLOR, unchecked((int)DWMWA_COLOR_NONE));
+            }
+        }
+
+        /// <summary>Turns off the accent policy's blur, gradient and acrylic, Windows 10's and 11's own glass.</summary>
+        private static void DisableAccent(IntPtr hwnd)
+        {
+            AccentPolicy accent = new AccentPolicy
+            {
+                AccentState = AccentState.ACCENT_DISABLED
+            };
+
+            int accentSize = Marshal.SizeOf(accent);
+            IntPtr accentPtr = Marshal.AllocHGlobal(accentSize);
+
+            try
+            {
+                Marshal.StructureToPtr(accent, accentPtr, false);
+
+                WindowCompositionAttributeData data = new WindowCompositionAttributeData
+                {
+                    Attribute = WindowCompositionAttribute.WCA_ACCENT_POLICY,
+                    Data = accentPtr,
+                    SizeOfData = accentSize
+                };
+
+                SetWindowCompositionAttribute(hwnd, ref data);
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Debug($"AeroGlassHelper: Unable to turn off the accent policy: {e.Message}");
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(accentPtr);
+            }
         }
 
         private static void SetAttribute(IntPtr hwnd, int attribute, int value)
         {
             try
             {
-                Native.DwmSetWindowAttribute(hwnd, attribute, ref value, sizeof(int));
+                DwmSetWindowAttribute(hwnd, attribute, ref value, sizeof(int));
             }
             catch (Exception e)
             {
                 ShellLogger.Debug($"AeroGlassHelper: Unable to set window attribute {attribute}: {e.Message}");
             }
         }
-
-        /// <summary>The window's area on the screen, in device pixels.</summary>
-        public static bool TryGetWindowArea(IntPtr hwnd, out ScreenArea area)
-        {
-            area = default;
-
-            if (hwnd == IntPtr.Zero || !Native.GetWindowRect(hwnd, out Native.RECT rect))
-            {
-                return false;
-            }
-
-            area = new ScreenArea(rect.Left, rect.Top, rect.Right, rect.Bottom);
-            return !area.IsEmpty;
-        }
-
-        /// <summary>The area of the monitor the window is on (or nearest to), in device pixels.</summary>
-        public static ScreenArea GetMonitorArea(IntPtr hwnd)
-        {
-            IntPtr monitor = Native.MonitorFromWindow(hwnd, Native.MONITOR_DEFAULTTONEAREST);
-            Native.MONITORINFO info = new Native.MONITORINFO { cbSize = Marshal.SizeOf<Native.MONITORINFO>() };
-
-            if (monitor != IntPtr.Zero && Native.GetMonitorInfo(monitor, ref info))
-            {
-                return new ScreenArea(info.rcMonitor.Left, info.rcMonitor.Top, info.rcMonitor.Right, info.rcMonitor.Bottom);
-            }
-
-            return GetVirtualScreenArea();
-        }
-
-        /// <summary>The area covered by all monitors together, in device pixels.</summary>
-        public static ScreenArea GetVirtualScreenArea()
-        {
-            int left = Native.GetSystemMetrics(Native.SM_XVIRTUALSCREEN);
-            int top = Native.GetSystemMetrics(Native.SM_YVIRTUALSCREEN);
-            int width = Native.GetSystemMetrics(Native.SM_CXVIRTUALSCREEN);
-            int height = Native.GetSystemMetrics(Native.SM_CYVIRTUALSCREEN);
-
-            return new ScreenArea(left, top, left + width, top + height);
-        }
-
-        /// <summary>
-        /// Reads part of the screen as it is shown now. Call it before the glass window is shown, so the window is not
-        /// part of what is read. Returns null if the screen cannot be read.
-        /// </summary>
-        public static GlassBackdrop CaptureScreen(ScreenArea area)
-        {
-            area = area.Intersect(GetVirtualScreenArea());
-
-            if (area.IsEmpty)
-            {
-                return null;
-            }
-
-            IntPtr screenDc = IntPtr.Zero;
-            IntPtr memoryDc = IntPtr.Zero;
-            IntPtr bitmap = IntPtr.Zero;
-            IntPtr oldBitmap = IntPtr.Zero;
-
-            try
-            {
-                screenDc = Native.GetDC(IntPtr.Zero);
-
-                if (screenDc == IntPtr.Zero)
-                {
-                    return null;
-                }
-
-                memoryDc = Native.CreateCompatibleDC(screenDc);
-
-                if (memoryDc == IntPtr.Zero)
-                {
-                    return null;
-                }
-
-                Native.BITMAPINFOHEADER header = new Native.BITMAPINFOHEADER
-                {
-                    biSize = (uint)Marshal.SizeOf<Native.BITMAPINFOHEADER>(),
-                    biWidth = area.Width,
-                    biHeight = -area.Height, // top row first
-                    biPlanes = 1,
-                    biBitCount = 32,
-                    biCompression = Native.BI_RGB
-                };
-
-                bitmap = Native.CreateDIBSection(screenDc, ref header, Native.DIB_RGB_COLORS, out IntPtr bits, IntPtr.Zero, 0);
-
-                if (bitmap == IntPtr.Zero || bits == IntPtr.Zero)
-                {
-                    return null;
-                }
-
-                oldBitmap = Native.SelectObject(memoryDc, bitmap);
-
-                // Plain SRCCOPY: with desktop composition the screen read already includes every window, and
-                // CAPTUREBLT would make the mouse pointer flicker
-                if (!Native.BitBlt(memoryDc, 0, 0, area.Width, area.Height, screenDc, area.Left, area.Top, Native.SRCCOPY))
-                {
-                    return null;
-                }
-
-                Native.GdiFlush();
-
-                byte[] pixels = new byte[area.Width * area.Height * 4];
-                Marshal.Copy(bits, pixels, 0, pixels.Length);
-                return new GlassBackdrop(area, pixels);
-            }
-            catch (Exception e)
-            {
-                ShellLogger.Warning($"AeroGlassHelper: Unable to read the screen: {e.Message}");
-                return null;
-            }
-            finally
-            {
-                if (oldBitmap != IntPtr.Zero)
-                {
-                    Native.SelectObject(memoryDc, oldBitmap);
-                }
-
-                if (bitmap != IntPtr.Zero)
-                {
-                    Native.DeleteObject(bitmap);
-                }
-
-                if (memoryDc != IntPtr.Zero)
-                {
-                    Native.DeleteDC(memoryDc);
-                }
-
-                if (screenDc != IntPtr.Zero)
-                {
-                    Native.ReleaseDC(IntPtr.Zero, screenDc);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Makes a window's glass: the part of the backdrop behind the window, blurred, at the window's size in device
-        /// pixels. Where the blur reaches past the backdrop, the nearest edge of the backdrop is used. Returns a frozen
-        /// bitmap, or null if the backdrop has nothing behind the window. Safe to call from any thread.
-        /// </summary>
-        public static BitmapSource RenderGlass(GlassBackdrop backdrop, ScreenArea window, double dpiScale)
-        {
-            if (backdrop == null || window.IsEmpty || backdrop.Area.Intersect(window).IsEmpty)
-            {
-                return null;
-            }
-
-            int radius = GetBlurRadius(dpiScale);
-            int reach = radius * BlurPasses;
-            ScreenArea region = window.Inflate(reach);
-            int width = region.Width;
-            int height = region.Height;
-
-            ScreenArea source = backdrop.Area;
-            byte[] sourcePixels = backdrop.Pixels;
-            int sourceStride = source.Width * 4;
-
-            // The window and the blur's reach around it
-            byte[] pixels = new byte[width * height * 4];
-
-            for (int y = 0; y < height; y++)
-            {
-                int sourceRow = (Math.Clamp(region.Top + y, source.Top, source.Bottom - 1) - source.Top) * sourceStride;
-                int row = y * width * 4;
-
-                for (int x = 0; x < width; x++)
-                {
-                    int from = sourceRow + (Math.Clamp(region.Left + x, source.Left, source.Right - 1) - source.Left) * 4;
-                    int to = row + x * 4;
-                    pixels[to] = sourcePixels[from];
-                    pixels[to + 1] = sourcePixels[from + 1];
-                    pixels[to + 2] = sourcePixels[from + 2];
-                }
-            }
-
-            BoxBlur(pixels, width, height, radius, BlurPasses);
-
-            // Cropped to the window; Bgr32 ignores the fourth byte, so the glass is fully opaque
-            int outputWidth = window.Width;
-            int outputHeight = window.Height;
-            int outputStride = outputWidth * 4;
-            byte[] output = new byte[outputStride * outputHeight];
-
-            for (int y = 0; y < outputHeight; y++)
-            {
-                Buffer.BlockCopy(pixels, ((y + reach) * width + reach) * 4, output, y * outputStride, outputStride);
-            }
-
-            BitmapSource glass = BitmapSource.Create(outputWidth, outputHeight, 96, 96, PixelFormats.Bgr32, null, output, outputStride);
-            glass.Freeze();
-            return glass;
-        }
-
-        /// <summary>
-        /// Blurs 32-bit BGRA pixels in place with repeated box blurs, along the rows and then along the columns,
-        /// taking the nearest edge pixel past each end. Only the colour channels are blurred.
-        /// </summary>
-        private static void BoxBlur(byte[] pixels, int width, int height, int radius, int passes)
-        {
-            byte[] scratch = new byte[pixels.Length];
-
-            for (int pass = 0; pass < passes; pass++)
-            {
-                BlurLines(pixels, scratch, width, height, radius, 4, width * 4);
-                BlurLines(scratch, pixels, height, width, radius, width * 4, 4);
-            }
-        }
-
-        /// <summary>
-        /// One box blur along lines of pixels: lineCount lines of length pixels each, with step bytes between the
-        /// pixels of a line and lineStep bytes between the starts of lines.
-        /// </summary>
-        private static void BlurLines(byte[] source, byte[] target, int length, int lineCount, int radius, int step, int lineStep)
-        {
-            int window = radius * 2 + 1;
-            int half = window / 2;
-            int last = length - 1;
-
-            for (int line = 0; line < lineCount; line++)
-            {
-                int start = line * lineStep;
-
-                for (int channel = 0; channel < 3; channel++)
-                {
-                    int origin = start + channel;
-                    int sum = source[origin] * (radius + 1);
-
-                    for (int i = 1; i <= radius; i++)
-                    {
-                        sum += source[origin + Math.Min(i, last) * step];
-                    }
-
-                    for (int i = 0; i < length; i++)
-                    {
-                        target[origin + i * step] = (byte)((sum + half) / window);
-                        sum += source[origin + Math.Min(i + radius + 1, last) * step] - source[origin + Math.Max(i - radius, 0) * step];
-                    }
-                }
-            }
-        }
-
-        internal static class Native
-        {
-            public const int SM_XVIRTUALSCREEN = 76;
-            public const int SM_YVIRTUALSCREEN = 77;
-            public const int SM_CXVIRTUALSCREEN = 78;
-            public const int SM_CYVIRTUALSCREEN = 79;
-            public const uint MONITOR_DEFAULTTONEAREST = 2;
-            public const uint SRCCOPY = 0x00CC0020;
-            public const uint BI_RGB = 0;
-            public const uint DIB_RGB_COLORS = 0;
-
-            // Windows 11 window attributes (dwmapi.h)
-            public const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
-            public const int DWMWA_BORDER_COLOR = 34;
-            public const int DWMWA_SYSTEMBACKDROP_TYPE = 38;
-            public const int DWMWA_MICA_EFFECT = 1029; // Windows 11 21H2, before DWMWA_SYSTEMBACKDROP_TYPE
-            public const int DWMWCP_DONOTROUND = 1;
-            public const int DWMSBT_NONE = 1;
-            public const uint DWMWA_COLOR_NONE = 0xFFFFFFFE;
-
-            [StructLayout(LayoutKind.Sequential)]
-            public struct RECT
-            {
-                public int Left;
-                public int Top;
-                public int Right;
-                public int Bottom;
-            }
-
-            [StructLayout(LayoutKind.Sequential)]
-            public struct MONITORINFO
-            {
-                public int cbSize;
-                public RECT rcMonitor;
-                public RECT rcWork;
-                public uint dwFlags;
-            }
-
-            [StructLayout(LayoutKind.Sequential)]
-            public struct BITMAPINFOHEADER
-            {
-                public uint biSize;
-                public int biWidth;
-                public int biHeight;
-                public ushort biPlanes;
-                public ushort biBitCount;
-                public uint biCompression;
-                public uint biSizeImage;
-                public int biXPelsPerMeter;
-                public int biYPelsPerMeter;
-                public uint biClrUsed;
-                public uint biClrImportant;
-            }
-
-            [DllImport("user32.dll")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-            [DllImport("user32.dll")]
-            public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
-
-            [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
-
-            [DllImport("user32.dll")]
-            public static extern int GetSystemMetrics(int nIndex);
-
-            [DllImport("user32.dll")]
-            public static extern IntPtr GetDC(IntPtr hWnd);
-
-            [DllImport("user32.dll")]
-            public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
-
-            [DllImport("gdi32.dll")]
-            public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
-
-            [DllImport("gdi32.dll")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            public static extern bool DeleteDC(IntPtr hdc);
-
-            [DllImport("gdi32.dll")]
-            public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER pbmi, uint usage, out IntPtr ppvBits, IntPtr hSection, uint offset);
-
-            [DllImport("gdi32.dll")]
-            public static extern IntPtr SelectObject(IntPtr hdc, IntPtr h);
-
-            [DllImport("gdi32.dll")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            public static extern bool DeleteObject(IntPtr ho);
-
-            [DllImport("gdi32.dll")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            public static extern bool BitBlt(IntPtr hdc, int x, int y, int cx, int cy, IntPtr hdcSrc, int x1, int y1, uint rop);
-
-            [DllImport("gdi32.dll")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            public static extern bool GdiFlush();
-
-            [DllImport("dwmapi.dll")]
-            public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
-        }
-    }
-
-    /// <summary>A rectangle on the screen in device pixels; Right and Bottom are exclusive.</summary>
-    internal readonly struct ScreenArea : IEquatable<ScreenArea>
-    {
-        public ScreenArea(int left, int top, int right, int bottom)
-        {
-            Left = left;
-            Top = top;
-            Right = right;
-            Bottom = bottom;
-        }
-
-        public int Left { get; }
-        public int Top { get; }
-        public int Right { get; }
-        public int Bottom { get; }
-
-        public int Width => Math.Max(0, Right - Left);
-        public int Height => Math.Max(0, Bottom - Top);
-        public bool IsEmpty => Right <= Left || Bottom <= Top;
-
-        public ScreenArea Inflate(int amount)
-        {
-            return new ScreenArea(Left - amount, Top - amount, Right + amount, Bottom + amount);
-        }
-
-        public ScreenArea Intersect(ScreenArea other)
-        {
-            int left = Math.Max(Left, other.Left);
-            int top = Math.Max(Top, other.Top);
-            int right = Math.Min(Right, other.Right);
-            int bottom = Math.Min(Bottom, other.Bottom);
-
-            return right <= left || bottom <= top ? default : new ScreenArea(left, top, right, bottom);
-        }
-
-        public bool Contains(int x, int y)
-        {
-            return x >= Left && x < Right && y >= Top && y < Bottom;
-        }
-
-        public bool Equals(ScreenArea other)
-        {
-            return Left == other.Left && Top == other.Top && Right == other.Right && Bottom == other.Bottom;
-        }
-
-        public override bool Equals(object obj)
-        {
-            return obj is ScreenArea other && Equals(other);
-        }
-
-        public override int GetHashCode()
-        {
-            return HashCode.Combine(Left, Top, Right, Bottom);
-        }
-
-        public override string ToString()
-        {
-            return $"{Left},{Top},{Right},{Bottom}";
-        }
-    }
-
-    /// <summary>
-    /// What is behind some glass: the pixels of part of the screen, 32-bit BGRA, top row first, Area.Width * 4 bytes
-    /// per row. The fourth byte is not used.
-    /// </summary>
-    internal sealed class GlassBackdrop
-    {
-        public GlassBackdrop(ScreenArea area, byte[] pixels)
-        {
-            if (area.IsEmpty)
-            {
-                throw new ArgumentException("The area is empty.", nameof(area));
-            }
-
-            if (pixels == null || pixels.Length < area.Width * area.Height * 4)
-            {
-                throw new ArgumentException("There are fewer pixels than the area needs.", nameof(pixels));
-            }
-
-            Area = area;
-            Pixels = pixels;
-        }
-
-        public ScreenArea Area { get; }
-        public byte[] Pixels { get; }
-    }
-
-    /// <summary>
-    /// The glass of one window: paints a rendered glass picture (AeroGlassHelper.RenderGlass) as the window's
-    /// background, under everything the window draws, and keeps the window's tint opacity in step: the Aero glass
-    /// transparency setting while the glass is shown, 1 otherwise, so opaque looks are never faded.
-    /// Use it on the window's thread only.
-    /// </summary>
-    internal sealed class GlassSurface
-    {
-        private readonly Window _window;
-        private readonly Action<double> _setTintOpacity;
-        private bool _backgroundSaved;
-        private object _savedBackground;
-
-        public GlassSurface(Window window, Action<double> setTintOpacity)
-        {
-            _window = window ?? throw new ArgumentNullException(nameof(window));
-            _setTintOpacity = setTintOpacity ?? throw new ArgumentNullException(nameof(setTintOpacity));
-        }
-
-        /// <summary>Whether glass is painted behind the window now.</summary>
-        public bool IsShowing { get; private set; }
-
-        /// <summary>Paints the glass behind the window. A null picture removes the glass.</summary>
-        public void Show(BitmapSource glass)
-        {
-            if (glass == null)
-            {
-                Clear();
-                return;
-            }
-
-            if (!_backgroundSaved)
-            {
-                _savedBackground = _window.ReadLocalValue(Control.BackgroundProperty);
-                _backgroundSaved = true;
-            }
-
-            ImageBrush brush = new ImageBrush(glass)
-            {
-                Stretch = Stretch.Fill
-            };
-            brush.Freeze();
-
-            _window.Background = brush;
-            IsShowing = true;
-            _setTintOpacity(AeroGlassHelper.TintOpacity);
-        }
-
-        /// <summary>Applies a changed Aero glass transparency setting.</summary>
-        public void UpdateTint()
-        {
-            _setTintOpacity(IsShowing ? AeroGlassHelper.TintOpacity : 1.0);
-        }
-
-        /// <summary>Removes the glass and gives the window its own background back.</summary>
-        public void Clear()
-        {
-            if (_backgroundSaved)
-            {
-                if (_savedBackground == DependencyProperty.UnsetValue)
-                {
-                    _window.ClearValue(Control.BackgroundProperty);
-                }
-                else
-                {
-                    _window.SetValue(Control.BackgroundProperty, _savedBackground);
-                }
-
-                _savedBackground = null;
-                _backgroundSaved = false;
-            }
-
-            IsShowing = false;
-            _setTintOpacity(1.0);
-        }
     }
 }
 // <RETROSTAR_SOURCE_END path="RetroBar/Utilities/AeroGlassHelper.cs">
-
-// <RETROSTAR_SOURCE_BEGIN path="RetroBar/Utilities/DesktopWallpaper.cs">
-namespace RetroBar.Utilities
-{
-    using ManagedShell.Common.Logging;
-    using Microsoft.Win32;
-    using System;
-    using System.IO;
-    using System.Runtime.InteropServices;
-    using System.Text;
-    using System.Windows;
-    using System.Windows.Media;
-    using System.Windows.Media.Imaging;
-
-    /// <summary>How the desktop picture is fitted to the screen (DESKTOP_WALLPAPER_POSITION).</summary>
-    internal enum WallpaperPosition
-    {
-        Center = 0,
-        Tile = 1,
-        Stretch = 2,
-        Fit = 3,
-        Fill = 4,
-        Span = 5
-    }
-
-    /// <summary>The desktop background of one monitor, as Windows has it set now.</summary>
-    internal sealed class WallpaperState
-    {
-        public WallpaperState(string path, WallpaperPosition position, uint backgroundColor, ScreenArea canvas)
-        {
-            Path = string.IsNullOrEmpty(path) ? null : path;
-            Position = position;
-            BackgroundColor = backgroundColor;
-            Canvas = canvas;
-
-            if (Path != null)
-            {
-                try
-                {
-                    FileInfo file = new FileInfo(Path);
-
-                    if (file.Exists)
-                    {
-                        WriteTimeUtc = file.LastWriteTimeUtc;
-                        Length = file.Length;
-                    }
-                }
-                catch (Exception e)
-                {
-                    ShellLogger.Debug($"WallpaperState: Unable to read {Path}: {e.Message}");
-                }
-            }
-        }
-
-        /// <summary>The picture file, or null when the background is a plain colour.</summary>
-        public string Path { get; }
-
-        public WallpaperPosition Position { get; }
-
-        /// <summary>The background colour around and behind the picture, as a COLORREF (0x00BBGGRR).</summary>
-        public uint BackgroundColor { get; }
-
-        /// <summary>The area the picture is fitted to: the monitor, or every monitor together when it spans.</summary>
-        public ScreenArea Canvas { get; }
-
-        public DateTime WriteTimeUtc { get; }
-
-        public long Length { get; }
-
-        /// <summary>Changes whenever the background as drawn would change, including a new picture in the same file.</summary>
-        public string Key => $"{Path}|{WriteTimeUtc.Ticks}|{Length}|{(int)Position}|{BackgroundColor}|{Canvas}";
-    }
-
-    /// <summary>
-    /// Reads the desktop background settings and draws the background the way Windows draws it: the background
-    /// colour, then the picture centred, tiled, stretched, fitted, filled or spanned across every monitor.
-    /// Used for the docked taskbar's glass (WallpaperGlass), which always sits over the desktop background.
-    /// </summary>
-    internal static class DesktopWallpaper
-    {
-        private static readonly Guid DesktopWallpaperClassId = new Guid("C2CF3110-460E-4fc1-B9D0-8A1C0C9CC4BD");
-        private static readonly Version Windows8 = new Version(6, 2);
-
-        private const uint SPI_GETDESKWALLPAPER = 0x0073;
-        private const int COLOR_DESKTOP = 1;
-        private const int MaxPathLength = 1024;
-
-        /// <summary>
-        /// The background of the given monitor. Call on the UI thread: on Windows 8 and later it asks Windows' desktop
-        /// wallpaper object, which gives each monitor its own picture; Windows 7 has one picture for every monitor.
-        /// </summary>
-        public static WallpaperState Query(ScreenArea monitor, ScreenArea virtualScreen)
-        {
-            if (Environment.OSVersion.Version >= Windows8 && TryQueryDesktopWallpaper(monitor, virtualScreen, out WallpaperState state))
-            {
-                return state;
-            }
-
-            return QueryLegacy(monitor, virtualScreen);
-        }
-
-        private static bool TryQueryDesktopWallpaper(ScreenArea monitor, ScreenArea virtualScreen, out WallpaperState state)
-        {
-            state = null;
-            object instance = null;
-
-            try
-            {
-                Type type = Type.GetTypeFromCLSID(DesktopWallpaperClassId, false);
-
-                if (type == null)
-                {
-                    return false;
-                }
-
-                instance = Activator.CreateInstance(type);
-                IDesktopWallpaper wallpaper = (IDesktopWallpaper)instance;
-
-                wallpaper.GetPosition(out WallpaperPosition position);
-                wallpaper.GetBackgroundColor(out uint backgroundColor);
-                string path = FindMonitorPicture(wallpaper, monitor);
-
-                ScreenArea canvas = position == WallpaperPosition.Span ? virtualScreen : monitor;
-                state = new WallpaperState(ResolvePicture(path), position, backgroundColor, canvas);
-                return true;
-            }
-            catch (Exception e)
-            {
-                ShellLogger.Debug($"DesktopWallpaper: Unable to read the desktop wallpaper settings: {e.Message}");
-                return false;
-            }
-            finally
-            {
-                if (instance != null && Marshal.IsComObject(instance))
-                {
-                    Marshal.ReleaseComObject(instance);
-                }
-            }
-        }
-
-        /// <summary>
-        /// The picture of the monitor with the given area: the monitor with exactly that area, else the one containing
-        /// its centre, else the picture shared by every monitor. An empty string means a plain colour.
-        /// </summary>
-        private static string FindMonitorPicture(IDesktopWallpaper wallpaper, ScreenArea monitor)
-        {
-            wallpaper.GetMonitorDevicePathCount(out uint count);
-
-            int centerX = monitor.Left + monitor.Width / 2;
-            int centerY = monitor.Top + monitor.Height / 2;
-            string containing = null;
-
-            for (uint i = 0; i < count; i++)
-            {
-                try
-                {
-                    wallpaper.GetMonitorDevicePathAt(i, out string id);
-
-                    if (string.IsNullOrEmpty(id))
-                    {
-                        continue;
-                    }
-
-                    wallpaper.GetMonitorRECT(id, out AeroGlassHelper.Native.RECT rect);
-                    ScreenArea area = new ScreenArea(rect.Left, rect.Top, rect.Right, rect.Bottom);
-
-                    if (area.Equals(monitor))
-                    {
-                        wallpaper.GetWallpaper(id, out string exact);
-                        return exact ?? string.Empty;
-                    }
-
-                    if (containing == null && area.Contains(centerX, centerY))
-                    {
-                        containing = id;
-                    }
-                }
-                catch (COMException)
-                {
-                    // A monitor that is not attached has no area
-                }
-            }
-
-            if (containing != null)
-            {
-                wallpaper.GetWallpaper(containing, out string path);
-                return path ?? string.Empty;
-            }
-
-            // The same picture on every monitor; empty if the monitors differ, then Windows' own copy is used
-            wallpaper.GetWallpaper(null, out string shared);
-            return string.IsNullOrEmpty(shared) ? FindTranscodedPicture() : shared;
-        }
-
-        /// <summary>Windows 7 has one picture for every monitor, in the classic settings.</summary>
-        private static WallpaperState QueryLegacy(ScreenArea monitor, ScreenArea virtualScreen)
-        {
-            string path = null;
-
-            try
-            {
-                StringBuilder buffer = new StringBuilder(MaxPathLength);
-
-                if (SystemParametersInfo(SPI_GETDESKWALLPAPER, (uint)buffer.Capacity, buffer, 0))
-                {
-                    path = buffer.ToString();
-                }
-            }
-            catch (Exception e)
-            {
-                ShellLogger.Debug($"DesktopWallpaper: Unable to read the wallpaper path: {e.Message}");
-            }
-
-            WallpaperPosition position = WallpaperPosition.Center;
-
-            try
-            {
-                using RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop");
-
-                if (key?.GetValue("TileWallpaper") as string == "1")
-                {
-                    position = WallpaperPosition.Tile;
-                }
-                else
-                {
-                    position = (key?.GetValue("WallpaperStyle") as string) switch
-                    {
-                        "2" => WallpaperPosition.Stretch,
-                        "6" => WallpaperPosition.Fit,
-                        "10" => WallpaperPosition.Fill,
-                        "22" => WallpaperPosition.Span,
-                        _ => WallpaperPosition.Center
-                    };
-                }
-            }
-            catch (Exception e)
-            {
-                ShellLogger.Debug($"DesktopWallpaper: Unable to read the wallpaper style: {e.Message}");
-            }
-
-            uint backgroundColor = GetSysColor(COLOR_DESKTOP);
-            ScreenArea canvas = position == WallpaperPosition.Span ? virtualScreen : monitor;
-
-            return new WallpaperState(ResolvePicture(path), position, backgroundColor, canvas);
-        }
-
-        /// <summary>
-        /// The file to draw for a picture path: the picture itself, or Windows' own copy of the current picture if the
-        /// file is gone. Null for a plain colour.
-        /// </summary>
-        private static string ResolvePicture(string path)
-        {
-            if (string.IsNullOrEmpty(path))
-            {
-                return null;
-            }
-
-            try
-            {
-                if (File.Exists(path))
-                {
-                    return path;
-                }
-            }
-            catch (Exception e)
-            {
-                ShellLogger.Debug($"DesktopWallpaper: Unable to check {path}: {e.Message}");
-            }
-
-            return FindTranscodedPicture();
-        }
-
-        /// <summary>Windows' own copy of the current desktop picture, or null if there is none.</summary>
-        private static string FindTranscodedPicture()
-        {
-            try
-            {
-                string themes = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Microsoft", "Windows", "Themes");
-
-                foreach (string name in new[] { "TranscodedWallpaper", "TranscodedWallpaper.jpg" })
-                {
-                    string candidate = System.IO.Path.Combine(themes, name);
-
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                ShellLogger.Debug($"DesktopWallpaper: Unable to find Windows' copy of the wallpaper: {e.Message}");
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Draws the desktop background inside the given area. The result covers the area clipped to the canvas (the
-        /// background does not reach past it), or is null if they do not meet. Safe to call from any thread.
-        /// </summary>
-        public static GlassBackdrop Render(WallpaperState state, ScreenArea area)
-        {
-            if (state == null)
-            {
-                return null;
-            }
-
-            ScreenArea target = area.Intersect(state.Canvas);
-
-            if (target.IsEmpty)
-            {
-                return null;
-            }
-
-            byte backBlue = (byte)((state.BackgroundColor >> 16) & 0xFF);
-            byte backGreen = (byte)((state.BackgroundColor >> 8) & 0xFF);
-            byte backRed = (byte)(state.BackgroundColor & 0xFF);
-
-            byte[] pixels = new byte[target.Width * target.Height * 4];
-
-            for (int i = 0; i < pixels.Length; i += 4)
-            {
-                pixels[i] = backBlue;
-                pixels[i + 1] = backGreen;
-                pixels[i + 2] = backRed;
-                pixels[i + 3] = 0xFF;
-            }
-
-            if (state.Path != null && !TryDrawPicture(state.Path, state.Position, state.Canvas, target, pixels))
-            {
-                // A picture Windows can show but this cannot read (or a file gone since): use Windows' own copy
-                string transcoded = FindTranscodedPicture();
-
-                if (transcoded != null && !string.Equals(transcoded, state.Path, StringComparison.OrdinalIgnoreCase))
-                {
-                    TryDrawPicture(transcoded, state.Position, state.Canvas, target, pixels);
-                }
-            }
-
-            return new GlassBackdrop(target, pixels);
-        }
-
-        private static bool TryDrawPicture(string path, WallpaperPosition position, ScreenArea canvas, ScreenArea target, byte[] pixels)
-        {
-            try
-            {
-                DrawPicture(path, position, canvas, target, pixels);
-                return true;
-            }
-            catch (Exception e)
-            {
-                ShellLogger.Debug($"DesktopWallpaper: Unable to draw {path}: {e.Message}");
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// Draws the picture over the background colour already in pixels, which covers target (inside canvas).
-        /// Every pixel is read before any is written, so a picture that cannot be read leaves pixels unchanged.
-        /// </summary>
-        private static void DrawPicture(string path, WallpaperPosition position, ScreenArea canvas, ScreenArea target, byte[] pixels)
-        {
-            using FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-
-            // Decoded on demand, so only the rows the target needs are scaled and copied
-            BitmapDecoder decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.None);
-            BitmapSource picture = decoder.Frames[0];
-
-            int pictureWidth = picture.PixelWidth;
-            int pictureHeight = picture.PixelHeight;
-
-            if (pictureWidth <= 0 || pictureHeight <= 0)
-            {
-                throw new InvalidDataException("The picture has no pixels.");
-            }
-
-            int canvasWidth = canvas.Width;
-            int canvasHeight = canvas.Height;
-            int drawWidth = pictureWidth;
-            int drawHeight = pictureHeight;
-
-            switch (position)
-            {
-                case WallpaperPosition.Center:
-                case WallpaperPosition.Tile:
-                    break;
-                case WallpaperPosition.Stretch:
-                    drawWidth = canvasWidth;
-                    drawHeight = canvasHeight;
-                    break;
-                case WallpaperPosition.Fit:
-                    {
-                        double scale = Math.Min((double)canvasWidth / pictureWidth, (double)canvasHeight / pictureHeight);
-                        drawWidth = Math.Max(1, (int)Math.Round(pictureWidth * scale));
-                        drawHeight = Math.Max(1, (int)Math.Round(pictureHeight * scale));
-                        break;
-                    }
-                default:
-                    {
-                        // Fill, and Span, which fills the area of every monitor together
-                        double scale = Math.Max((double)canvasWidth / pictureWidth, (double)canvasHeight / pictureHeight);
-                        drawWidth = Math.Max(1, (int)Math.Round(pictureWidth * scale));
-                        drawHeight = Math.Max(1, (int)Math.Round(pictureHeight * scale));
-                        break;
-                    }
-            }
-
-            BitmapSource drawn = picture;
-
-            if (drawWidth != pictureWidth || drawHeight != pictureHeight)
-            {
-                drawn = new TransformedBitmap(drawn, new ScaleTransform((double)drawWidth / pictureWidth, (double)drawHeight / pictureHeight));
-            }
-
-            if (drawn.Format != PixelFormats.Bgra32)
-            {
-                drawn = new FormatConvertedBitmap(drawn, PixelFormats.Bgra32, null, 0);
-            }
-
-            // The size actually produced, which scaling can round by a pixel
-            drawWidth = drawn.PixelWidth;
-            drawHeight = drawn.PixelHeight;
-            int drawStride = drawWidth * 4;
-
-            // The target's position on the canvas
-            int targetX = target.Left - canvas.Left;
-            int targetY = target.Top - canvas.Top;
-            int targetWidth = target.Width;
-            int targetHeight = target.Height;
-
-            if (position == WallpaperPosition.Tile)
-            {
-                // Tiled from the canvas's top-left corner
-                byte[] tile = new byte[drawStride * drawHeight];
-                drawn.CopyPixels(tile, drawStride, 0);
-
-                for (int y = 0; y < targetHeight; y++)
-                {
-                    int tileRow = Modulo(targetY + y, drawHeight) * drawStride;
-                    int row = y * targetWidth * 4;
-
-                    for (int x = 0; x < targetWidth; x++)
-                    {
-                        Blend(tile, tileRow + Modulo(targetX + x, drawWidth) * 4, pixels, row + x * 4);
-                    }
-                }
-
-                return;
-            }
-
-            // Centred on the canvas: larger pictures are cropped evenly on both sides, smaller ones show the colour
-            int originX = (canvasWidth - drawWidth) / 2;
-            int originY = (canvasHeight - drawHeight) / 2;
-
-            int left = Math.Max(targetX, originX);
-            int top = Math.Max(targetY, originY);
-            int right = Math.Min(targetX + targetWidth, originX + drawWidth);
-            int bottom = Math.Min(targetY + targetHeight, originY + drawHeight);
-
-            if (right <= left || bottom <= top)
-            {
-                return;
-            }
-
-            int copyWidth = right - left;
-            int copyHeight = bottom - top;
-            int copyStride = copyWidth * 4;
-            byte[] part = new byte[copyStride * copyHeight];
-            drawn.CopyPixels(new Int32Rect(left - originX, top - originY, copyWidth, copyHeight), part, copyStride, 0);
-
-            for (int y = 0; y < copyHeight; y++)
-            {
-                int row = ((top - targetY + y) * targetWidth + (left - targetX)) * 4;
-                int partRow = y * copyStride;
-
-                for (int x = 0; x < copyWidth; x++)
-                {
-                    Blend(part, partRow + x * 4, pixels, row + x * 4);
-                }
-            }
-        }
-
-        private static int Modulo(int value, int divisor)
-        {
-            int result = value % divisor;
-            return result < 0 ? result + divisor : result;
-        }
-
-        /// <summary>Draws one BGRA pixel over the opaque pixel already in target.</summary>
-        private static void Blend(byte[] source, int from, byte[] target, int to)
-        {
-            int alpha = source[from + 3];
-
-            if (alpha == 0xFF)
-            {
-                target[to] = source[from];
-                target[to + 1] = source[from + 1];
-                target[to + 2] = source[from + 2];
-            }
-            else if (alpha != 0)
-            {
-                int inverse = 0xFF - alpha;
-                target[to] = (byte)((source[from] * alpha + target[to] * inverse + 127) / 0xFF);
-                target[to + 1] = (byte)((source[from + 1] * alpha + target[to + 1] * inverse + 127) / 0xFF);
-                target[to + 2] = (byte)((source[from + 2] * alpha + target[to + 2] * inverse + 127) / 0xFF);
-            }
-        }
-
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, StringBuilder pvParam, uint fWinIni);
-
-        [DllImport("user32.dll")]
-        private static extern uint GetSysColor(int nIndex);
-
-        /// <summary>
-        /// Windows' desktop wallpaper object (shobjidl_core.h), Windows 8 and later. Only the methods used are
-        /// declared; they are the first ones, in order.
-        /// </summary>
-        [ComImport]
-        [Guid("B92B56A9-8B55-4E14-9A89-0199BBB6F93B")]
-        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        private interface IDesktopWallpaper
-        {
-            void SetWallpaper([MarshalAs(UnmanagedType.LPWStr)] string monitorID, [MarshalAs(UnmanagedType.LPWStr)] string wallpaper);
-
-            void GetWallpaper([MarshalAs(UnmanagedType.LPWStr)] string monitorID, [MarshalAs(UnmanagedType.LPWStr)] out string wallpaper);
-
-            void GetMonitorDevicePathAt(uint monitorIndex, [MarshalAs(UnmanagedType.LPWStr)] out string monitorID);
-
-            void GetMonitorDevicePathCount(out uint count);
-
-            void GetMonitorRECT([MarshalAs(UnmanagedType.LPWStr)] string monitorID, out AeroGlassHelper.Native.RECT displayRect);
-
-            void SetBackgroundColor(uint color);
-
-            void GetBackgroundColor(out uint color);
-
-            void SetPosition(WallpaperPosition position);
-
-            void GetPosition(out WallpaperPosition position);
-        }
-    }
-}
-// <RETROSTAR_SOURCE_END path="RetroBar/Utilities/DesktopWallpaper.cs">
-
-// <RETROSTAR_SOURCE_BEGIN path="RetroBar/Utilities/WallpaperGlass.cs">
-namespace RetroBar.Utilities
-{
-    using ManagedShell.Common.Logging;
-    using System;
-    using System.Threading.Tasks;
-    using System.Windows;
-    using System.Windows.Interop;
-    using System.Windows.Media;
-    using System.Windows.Media.Imaging;
-    using System.Windows.Threading;
-
-    /// <summary>
-    /// The glass of a window that always sits over the desktop background (the docked taskbar): the background behind
-    /// the window, drawn by DesktopWallpaper and blurred by AeroGlassHelper. It is drawn again whenever the picture,
-    /// its fitting, the background colour, the monitors, the DPI or the window's place changes, and the background
-    /// is checked every few seconds as well, for slideshows. Drawing happens off the UI thread.
-    /// </summary>
-    internal sealed class WallpaperGlass : IDisposable
-    {
-        private static readonly TimeSpan CheckInterval = TimeSpan.FromSeconds(10);
-        private static readonly TimeSpan SettleDelay = TimeSpan.FromMilliseconds(250);
-
-        private readonly Window _window;
-        private readonly Action<BitmapSource> _rendered;
-        private readonly DispatcherTimer _checkTimer;
-        private readonly DispatcherTimer _settleTimer;
-        private string _renderedKey;
-        private int _generation;
-        private bool _running;
-        private bool _disposed;
-
-        /// <param name="window">The glass window.</param>
-        /// <param name="rendered">
-        /// Called on the window's thread with each new glass picture, or with null if it could not be drawn.
-        /// </param>
-        public WallpaperGlass(Window window, Action<BitmapSource> rendered)
-        {
-            _window = window ?? throw new ArgumentNullException(nameof(window));
-            _rendered = rendered ?? throw new ArgumentNullException(nameof(rendered));
-
-            _checkTimer = new DispatcherTimer(DispatcherPriority.Background, window.Dispatcher)
-            {
-                Interval = CheckInterval
-            };
-            _checkTimer.Tick += (sender, e) => Refresh();
-
-            _settleTimer = new DispatcherTimer(DispatcherPriority.Background, window.Dispatcher)
-            {
-                Interval = SettleDelay
-            };
-            _settleTimer.Tick += (sender, e) =>
-            {
-                _settleTimer.Stop();
-                Refresh();
-            };
-        }
-
-        /// <summary>Starts drawing the glass, at once if anything changed since it was last drawn.</summary>
-        public void Start()
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _running = true;
-
-            if (!_checkTimer.IsEnabled)
-            {
-                _checkTimer.Start();
-            }
-
-            Refresh();
-        }
-
-        /// <summary>Stops drawing the glass; a picture still being drawn is discarded.</summary>
-        public void Stop()
-        {
-            _running = false;
-            _checkTimer.Stop();
-            _settleTimer.Stop();
-            _generation++;
-            _renderedKey = null;
-        }
-
-        /// <summary>Draws the glass again once the window has stopped moving or resizing.</summary>
-        public void RefreshSoon()
-        {
-            if (!_running || _disposed)
-            {
-                return;
-            }
-
-            _settleTimer.Stop();
-            _settleTimer.Start();
-        }
-
-        /// <summary>Draws the glass again if the background or the window's place has changed.</summary>
-        public void Refresh()
-        {
-            if (!_running || _disposed)
-            {
-                return;
-            }
-
-            IntPtr hwnd = new WindowInteropHelper(_window).Handle;
-
-            if (!AeroGlassHelper.TryGetWindowArea(hwnd, out ScreenArea windowArea))
-            {
-                return;
-            }
-
-            double scale = VisualTreeHelper.GetDpi(_window).DpiScaleX;
-            int reach = AeroGlassHelper.GetBlurReach(scale);
-            WallpaperState state = DesktopWallpaper.Query(AeroGlassHelper.GetMonitorArea(hwnd), AeroGlassHelper.GetVirtualScreenArea());
-            string key = $"{state.Key}|{windowArea}|{reach}";
-
-            if (key == _renderedKey)
-            {
-                return;
-            }
-
-            _renderedKey = key;
-            int generation = ++_generation;
-            Dispatcher dispatcher = _window.Dispatcher;
-
-            Task.Run(() => AeroGlassHelper.RenderGlass(DesktopWallpaper.Render(state, windowArea.Inflate(reach)), windowArea, scale))
-                .ContinueWith(task =>
-                {
-                    BitmapSource glass = null;
-
-                    if (task.IsFaulted)
-                    {
-                        ShellLogger.Warning($"WallpaperGlass: Unable to draw the glass: {task.Exception?.GetBaseException().Message}");
-                    }
-                    else if (task.Status == TaskStatus.RanToCompletion)
-                    {
-                        glass = task.Result;
-                    }
-
-                    dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() => Deliver(generation, glass)));
-                }, TaskScheduler.Default);
-        }
-
-        private void Deliver(int generation, BitmapSource glass)
-        {
-            if (generation != _generation || !_running || _disposed)
-            {
-                return;
-            }
-
-            if (glass == null)
-            {
-                // Try again at the next check
-                _renderedKey = null;
-            }
-
-            _rendered(glass);
-        }
-
-        public void Dispose()
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            Stop();
-            _disposed = true;
-        }
-    }
-}
-// <RETROSTAR_SOURCE_END path="RetroBar/Utilities/WallpaperGlass.cs">
 
 // <RETROSTAR_SOURCE_BEGIN path="RetroBar/Utilities/InvertEffect.cs">
 namespace RetroBar.Utilities

@@ -514,7 +514,7 @@
                                       IsChecked="{Binding Source={x:Static Settings:Settings.Instance}, Path=EnableAeroGlass, UpdateSourceTrigger=PropertyChanged}">
                                 <Label Content="{DynamicResource enable_aero_glass}" />
                             </CheckBox>
-                            <!-- Fades the tint every glass surface paints over the blur: 0% is the measured look, 100% the blur alone -->
+                            <!-- Fades the tint every see-through glass surface draws: 0% is Aero's look, 100% is clear glass -->
                             <DockPanel IsEnabled="{Binding Source={x:Static Settings:Settings.Instance}, Path=EnableAeroGlass, UpdateSourceTrigger=PropertyChanged}">
                                 <Label VerticalAlignment="Center"
                                        Target="{Binding ElementName=sliderAeroGlassTransparency}">

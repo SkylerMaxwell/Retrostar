@@ -108,8 +108,11 @@
         Windows 7 orb image is supplied.
     -->
     <!--
-        Superbar buttons. A slot is 62 px: a 60 px button and a 2 px gap. Each extra window draws a stacked edge
-        5 px to the right of the button, which narrows the button by the same amount.
+        Superbar buttons. A slot is 62 px: a 60 px button and a 2 px gap. A program with more than one window shows
+        the buttons stacked behind it inside the same 60 px, as Windows 7 does: with two windows the button is 55 px
+        and one copy of it shows 5 px to its right; with three or more it is 52 px and two copies show 4 px each.
+        Each copy is the same button in the same state (normal, hover, active, flashing), of which only the exposed
+        right edge is drawn. Measured from Windows 7 at 100% scale.
         A pinned program that is not running has no frame until it is hovered.
     -->
     <SolidColorBrush x:Key="SuperbarButtonOuterBorder" Color="#73000000" />
@@ -166,10 +169,6 @@
         <GradientStop Color="#D9EA8F1C" Offset="0.46" />
         <GradientStop Color="#E6F4A93F" Offset="1.0" />
     </LinearGradientBrush>
-
-    <SolidColorBrush x:Key="SuperbarStackOuterBorder" Color="#59000000" />
-    <SolidColorBrush x:Key="SuperbarStackInnerBorder" Color="#40FFFFFF" />
-    <SolidColorBrush x:Key="SuperbarStackBackground" Color="#14FFFFFF" />
 
     <LinearGradientBrush x:Key="SuperbarProgressNormal" StartPoint="0,0" EndPoint="0,1">
         <GradientStop Color="#B07AE85A" Offset="0.0" />
@@ -229,28 +228,43 @@
                     <Grid Background="Transparent"
                           Margin="0,0,2,0"
                           x:Name="Slot">
-                        <Border x:Name="Stack2"
-                                Margin="10,0,0,0"
-                                Visibility="Collapsed"
-                                CornerRadius="3"
-                                BorderThickness="1"
-                                BorderBrush="{DynamicResource SuperbarStackOuterBorder}">
-                            <Border CornerRadius="2"
+                        <!--
+                            Stacked windows: copies of the button, as wide as Main and in its current brushes, set
+                            behind it to the right. Each is clipped to the strip it exposes, so the glass of the copies
+                            never adds up under the button. Stack2 is the rearmost.
+                        -->
+                        <Grid x:Name="Stack2"
+                              Visibility="Collapsed"
+                              HorizontalAlignment="Right"
+                              Width="4"
+                              ClipToBounds="True">
+                            <Border HorizontalAlignment="Right"
+                                    Width="{Binding ActualWidth, ElementName=Main}"
+                                    CornerRadius="3"
                                     BorderThickness="1"
-                                    BorderBrush="{DynamicResource SuperbarStackInnerBorder}"
-                                    Background="{DynamicResource SuperbarStackBackground}" />
-                        </Border>
-                        <Border x:Name="Stack1"
-                                Margin="5,0,0,0"
-                                Visibility="Collapsed"
-                                CornerRadius="3"
-                                BorderThickness="1"
-                                BorderBrush="{DynamicResource SuperbarStackOuterBorder}">
-                            <Border CornerRadius="2"
+                                    BorderBrush="{Binding BorderBrush, ElementName=Outer}">
+                                <Border CornerRadius="2"
+                                        BorderThickness="1"
+                                        BorderBrush="{Binding BorderBrush, ElementName=Inner}"
+                                        Background="{Binding Background, ElementName=Inner}" />
+                            </Border>
+                        </Grid>
+                        <Grid x:Name="Stack1"
+                              Visibility="Collapsed"
+                              HorizontalAlignment="Right"
+                              Width="5"
+                              ClipToBounds="True">
+                            <Border HorizontalAlignment="Right"
+                                    Width="{Binding ActualWidth, ElementName=Main}"
+                                    CornerRadius="3"
                                     BorderThickness="1"
-                                    BorderBrush="{DynamicResource SuperbarStackInnerBorder}"
-                                    Background="{DynamicResource SuperbarStackBackground}" />
-                        </Border>
+                                    BorderBrush="{Binding BorderBrush, ElementName=Outer}">
+                                <Border CornerRadius="2"
+                                        BorderThickness="1"
+                                        BorderBrush="{Binding BorderBrush, ElementName=Inner}"
+                                        Background="{Binding Background, ElementName=Inner}" />
+                            </Border>
+                        </Grid>
                         <Grid x:Name="Main">
                             <Border x:Name="Outer"
                                     CornerRadius="3"
@@ -323,11 +337,14 @@
                                     Property="Visibility"
                                     Value="Visible" />
                             <Setter TargetName="Stack1"
+                                    Property="Width"
+                                    Value="4" />
+                            <Setter TargetName="Stack1"
                                     Property="Margin"
-                                    Value="5,0,5,0" />
+                                    Value="0,0,4,0" />
                             <Setter TargetName="Main"
                                     Property="Margin"
-                                    Value="0,0,10,0" />
+                                    Value="0,0,8,0" />
                         </DataTrigger>
                         <DataTrigger Binding="{Binding Path=IsActive}"
                                      Value="True">
@@ -487,19 +504,6 @@
                 <GradientStop Color="#FFFCE7B5" Offset="0.0" />
                 <GradientStop Color="#FFF7C76A" Offset="0.5" />
                 <GradientStop Color="#FFF4B649" Offset="1.0" />
-            </LinearGradientBrush>
-
-            <LinearGradientBrush x:Key="SuperbarStackOuterBorder" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FF54616F" Offset="0.0" />
-                <GradientStop Color="#FF6E7E91" Offset="1.0" />
-            </LinearGradientBrush>
-            <LinearGradientBrush x:Key="SuperbarStackInnerBorder" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FFC8D8E9" Offset="0.0" />
-                <GradientStop Color="#FFD0DEEC" Offset="1.0" />
-            </LinearGradientBrush>
-            <LinearGradientBrush x:Key="SuperbarStackBackground" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FFBBCEE4" Offset="0.0" />
-                <GradientStop Color="#FFAEC5DF" Offset="1.0" />
             </LinearGradientBrush>
 
             <system:Double x:Key="SuperbarGlowOpacity">0.35</system:Double>

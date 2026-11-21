@@ -545,7 +545,7 @@
         Geometry measured from Windows Vista at 100% scale: a 405 x 508 frame with a 1 px dark outline and
         a 1 px light inner edge, a 254 x 464 programs pane 7 px in from each side, a 24 px search box and
         power strip 6 px below it, and 6 px of glass around everything.
-        The user picture is drawn by its own window (UserPictureWindow) so the glass blur never shows above the frame.
+        The user picture is drawn by its own window (UserPictureWindow) so the glass never shows above the frame.
     -->
     <!-- The frame sizes the menu; its background and outline are painted by FrameTint so they can be faded alone -->
     <Border x:Name="Frame"
