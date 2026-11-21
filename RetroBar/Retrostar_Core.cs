@@ -38,6 +38,13 @@ namespace RetroBar
         [STAThread]
         public static int Main(string[] args)
         {
+            if (args.Length == 2 && args[0] == RetroBar.Utilities.VistaSoundScheme.RestoreArgument && int.TryParse(args[1], out int ownerPid))
+            {
+                // The Vista sounds watchdog: no window, no instance check, only the restore of the Windows sounds
+                RetroBar.Utilities.VistaSoundScheme.RunWatchdog(ownerPid);
+                return 0;
+            }
+
             if (!SingleInstanceCheck())
             {
                 return 1;
@@ -967,6 +974,17 @@ namespace RetroBar.Utilities
         {
             get => _aeroGlassTransparency;
             set => Set(ref _aeroGlassTransparency, Math.Clamp(value, 0, 100));
+        }
+
+        private bool _useVistaSounds = true;
+        /// <summary>
+        /// Plays Windows Vista's sounds in place of the current ones while Retrostar runs; the current ones return when it
+        /// closes (VistaSoundScheme).
+        /// </summary>
+        public bool UseVistaSounds
+        {
+            get => _useVistaSounds;
+            set => Set(ref _useVistaSounds, value);
         }
 
         private bool _allowBlurBehind = true;
@@ -2512,6 +2530,469 @@ namespace RetroBar.Utilities
     }
 }
 // <RETROSTAR_SOURCE_END path="RetroBar/Utilities/VolumeChanger.cs">
+
+// <RETROSTAR_SOURCE_BEGIN path="RetroBar/Utilities/VistaSoundScheme.cs">
+namespace RetroBar.Utilities
+{
+    using ManagedShell.Common.Logging;
+    using Microsoft.Win32;
+    using System;
+    using System.Collections.Generic;
+    using System.Diagnostics;
+    using System.IO;
+    using System.Text.Json;
+    using System.Threading;
+
+    /// <summary>
+    /// Windows Vista's sounds, for as long as Retrostar runs.
+    ///
+    /// Windows plays its sounds from the current user's sound scheme, one registry entry per event
+    /// (HKCU\AppEvents\Schemes\Apps\[application]\[event]\.Current). Apply points the events Windows still raises at the
+    /// Vista files in Resources\Sounds; Restore puts every entry back exactly as it was. Nothing else is changed: no
+    /// scheme name, no file in Windows, and nothing for the sounds Windows 8 and later no longer play (start up, log on,
+    /// log off, shut down).
+    ///
+    /// The original entries are written to a backup file before anything is changed, and the backup names the process
+    /// that owns it. A separate watchdog process (this executable started with RestoreArgument) waits for that process
+    /// and restores if it ends without restoring, whether it was killed, crashed or lost power with the session. The
+    /// next Apply also restores whatever a lost session left. A named mutex orders all of these.
+    /// </summary>
+    internal sealed class VistaSoundScheme : IDisposable
+    {
+        public const string RestoreArgument = "--restore-vista-sounds";
+
+        private const string SchemesRoot = @"AppEvents\Schemes\Apps";
+        private const string LabelsRoot = @"AppEvents\EventLabels";
+        private const string LockName = "RetroBar.VistaSounds";
+        private const string BackupFileName = "vista-sounds-backup.json";
+
+        // Application, event and Vista file. Applications: .Default is every program, the others are named in the scheme.
+        private static readonly (string App, string Event, string File)[] Map =
+        {
+            (".Default", ".Default", "Windows Default.wav"),
+            (".Default", "SystemAsterisk", "Windows Ding.wav"),
+            (".Default", "SystemQuestion", "Windows Ding.wav"),
+            (".Default", "SystemExclamation", "Windows Exclamation.wav"),
+            (".Default", "SystemHand", "Windows Critical Stop.wav"),
+            (".Default", "AppGPFault", "Windows Error.wav"),
+            (".Default", "SystemNotification", "Windows Balloon.wav"),
+            (".Default", "MailBeep", "Windows Notify.wav"),
+            (".Default", "Notification.Default", "Windows Notify.wav"),
+            (".Default", "Notification.IM", "Windows Notify.wav"),
+            (".Default", "Notification.Mail", "Windows Notify.wav"),
+            (".Default", "Notification.Reminder", "Windows Notify.wav"),
+            (".Default", "Notification.SMS", "Windows Notify.wav"),
+            (".Default", "Minimize", "Windows Minimize.wav"),
+            (".Default", "RestoreUp", "Windows Restore.wav"),
+            (".Default", "MenuCommand", "Windows Menu Command.wav"),
+            (".Default", "WindowsUAC", "Windows User Account Control.wav"),
+            (".Default", "DeviceConnect", "Windows Hardware Insert.wav"),
+            (".Default", "DeviceDisconnect", "Windows Hardware Remove.wav"),
+            (".Default", "DeviceFail", "Windows Hardware Fail.wav"),
+            (".Default", "LowBatteryAlarm", "Windows Battery Low.wav"),
+            (".Default", "CriticalBatteryAlarm", "Windows Battery Critical.wav"),
+            (".Default", "PrintComplete", "Windows Print complete.wav"),
+            ("Explorer", "Navigating", "Windows Navigation Start.wav"),
+            ("Explorer", "EmptyRecycleBin", "Windows Recycle.wav"),
+            ("Explorer", "FeedDiscovered", "Windows Feed Discovered.wav"),
+            ("Explorer", "SecurityBand", "Windows Information Bar.wav"),
+            ("Explorer", "BlockedPopup", "Windows Pop-up Blocked.wav"),
+            ("sapisvr", "DisNumbersSound", "Speech Disambiguation.wav"),
+            ("sapisvr", "HubOffSound", "Speech Off.wav"),
+            ("sapisvr", "HubOnSound", "Speech On.wav"),
+            ("sapisvr", "HubSleepSound", "Speech Sleep.wav"),
+            ("sapisvr", "MisrecoSound", "Speech Misrecognition.wav"),
+        };
+
+        /// <summary>One scheme entry as it was before Apply: enough to put it back or remove it.</summary>
+        internal sealed class Entry
+        {
+            public string App { get; set; }
+            public string Event { get; set; }
+            public bool AppKeyExisted { get; set; }
+            public bool EventKeyExisted { get; set; }
+            public bool CurrentKeyExisted { get; set; }
+            public bool HadValue { get; set; }
+            public string Kind { get; set; }
+            public string Data { get; set; }
+        }
+
+        internal sealed class Backup
+        {
+            public int OwnerPid { get; set; }
+            public List<Entry> Entries { get; set; } = new List<Entry>();
+        }
+
+        private bool _applied;
+
+        /// <summary>Whether the Vista sounds are currently in the scheme.</summary>
+        public bool IsApplied => _applied;
+
+        public void Apply()
+        {
+            if (_applied)
+            {
+                return;
+            }
+
+            try
+            {
+                string directory = FindSoundsDirectory();
+                if (directory == null)
+                {
+                    ShellLogger.Error("VistaSoundScheme: the Resources\\Sounds folder was not found");
+                    return;
+                }
+
+                using (new SoundLock())
+                {
+                    // Whatever a lost session left behind is restored first, so that the backup below holds the real originals
+                    RestoreLocked(null);
+
+                    var backup = new Backup { OwnerPid = Environment.ProcessId };
+                    var files = new List<string>();
+
+                    foreach (var (app, eventName, file) in Map)
+                    {
+                        string path = Path.Combine(directory, file);
+
+                        if (!File.Exists(path) || !EventExists(eventName))
+                        {
+                            continue;
+                        }
+
+                        Entry entry = Capture(app, eventName);
+                        if (entry == null)
+                        {
+                            continue;
+                        }
+
+                        backup.Entries.Add(entry);
+                        files.Add(path);
+                    }
+
+                    if (backup.Entries.Count == 0)
+                    {
+                        return;
+                    }
+
+                    // The originals are safe on disk before the first change
+                    WriteBackup(backup);
+                    _applied = true;
+
+                    for (int i = 0; i < backup.Entries.Count; i++)
+                    {
+                        try
+                        {
+                            using (RegistryKey key = Registry.CurrentUser.CreateSubKey(CurrentPath(backup.Entries[i].App, backup.Entries[i].Event)))
+                            {
+                                key.SetValue("", files[i], RegistryValueKind.String);
+                            }
+                        }
+                        catch (Exception e)
+                        {
+                            ShellLogger.Error($"VistaSoundScheme: could not set {backup.Entries[i].Event}: {e.Message}");
+                        }
+                    }
+                }
+
+                StartWatchdog();
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaSoundScheme: could not apply the Vista sounds: {e.Message}");
+            }
+        }
+
+        /// <summary>Puts every entry back as it was. Does nothing when the sounds are not applied.</summary>
+        public void Restore()
+        {
+            if (!_applied)
+            {
+                return;
+            }
+
+            try
+            {
+                using (new SoundLock())
+                {
+                    RestoreLocked(Environment.ProcessId);
+                }
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaSoundScheme: could not restore the Windows sounds: {e.Message}");
+            }
+
+            _applied = false;
+        }
+
+        public void Dispose()
+        {
+            Restore();
+        }
+
+        /// <summary>
+        /// Entry point of the watchdog process: waits for the process that owns the backup, then restores if it did not.
+        /// Runs before any window or setting exists.
+        /// </summary>
+        public static void RunWatchdog(int ownerPid)
+        {
+            try
+            {
+                using (Process owner = Process.GetProcessById(ownerPid))
+                {
+                    owner.WaitForExit();
+                }
+            }
+            catch (ArgumentException)
+            {
+                // The owner has already ended
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaSoundScheme: watchdog could not wait for {ownerPid}: {e.Message}");
+            }
+
+            try
+            {
+                using (new SoundLock())
+                {
+                    // Only the backup this owner made: a newer Retrostar may have made its own since
+                    RestoreLocked(ownerPid);
+                }
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaSoundScheme: watchdog could not restore: {e.Message}");
+            }
+        }
+
+        private static string CurrentPath(string app, string eventName)
+        {
+            return $@"{SchemesRoot}\{app}\{eventName}\.Current";
+        }
+
+        private static bool EventExists(string eventName)
+        {
+            // Only events this Windows has: older and newer versions differ in what they define
+            using (RegistryKey label = Registry.CurrentUser.OpenSubKey($@"{LabelsRoot}\{eventName}"))
+            {
+                return label != null;
+            }
+        }
+
+        private static Entry Capture(string app, string eventName)
+        {
+            var entry = new Entry { App = app, Event = eventName };
+
+            using (RegistryKey appKey = Registry.CurrentUser.OpenSubKey($@"{SchemesRoot}\{app}"))
+            using (RegistryKey eventKey = Registry.CurrentUser.OpenSubKey($@"{SchemesRoot}\{app}\{eventName}"))
+            using (RegistryKey current = Registry.CurrentUser.OpenSubKey(CurrentPath(app, eventName)))
+            {
+                entry.AppKeyExisted = appKey != null;
+                entry.EventKeyExisted = eventKey != null;
+                entry.CurrentKeyExisted = current != null;
+
+                if (current != null && Array.IndexOf(current.GetValueNames(), "") >= 0)
+                {
+                    RegistryValueKind kind = current.GetValueKind("");
+
+                    if (kind != RegistryValueKind.String && kind != RegistryValueKind.ExpandString)
+                    {
+                        // Not a sound path: leave this entry alone
+                        return null;
+                    }
+
+                    entry.HadValue = true;
+                    entry.Kind = kind.ToString();
+                    entry.Data = current.GetValue("", "", RegistryValueOptions.DoNotExpandEnvironmentNames) as string ?? "";
+                }
+            }
+
+            return entry;
+        }
+
+        private static void RestoreLocked(int? requiredOwner)
+        {
+            Backup backup = ReadBackup();
+
+            if (backup == null || (requiredOwner.HasValue && backup.OwnerPid != requiredOwner.Value))
+            {
+                return;
+            }
+
+            for (int i = backup.Entries.Count - 1; i >= 0; i--)
+            {
+                Entry entry = backup.Entries[i];
+
+                try
+                {
+                    string eventPath = $@"{SchemesRoot}\{entry.App}\{entry.Event}";
+                    string appPath = $@"{SchemesRoot}\{entry.App}";
+
+                    if (!entry.EventKeyExisted)
+                    {
+                        // The event was not in the scheme: take out what was added, and what is left empty
+                        Registry.CurrentUser.DeleteSubKeyTree(eventPath, false);
+                    }
+                    else if (!entry.CurrentKeyExisted)
+                    {
+                        Registry.CurrentUser.DeleteSubKeyTree(CurrentPath(entry.App, entry.Event), false);
+                    }
+                    else if (entry.HadValue)
+                    {
+                        using (RegistryKey key = Registry.CurrentUser.CreateSubKey(CurrentPath(entry.App, entry.Event)))
+                        {
+                            key.SetValue("", entry.Data ?? "", Enum.TryParse(entry.Kind, out RegistryValueKind kind) ? kind : RegistryValueKind.String);
+                        }
+                    }
+                    else
+                    {
+                        using (RegistryKey key = Registry.CurrentUser.OpenSubKey(CurrentPath(entry.App, entry.Event), true))
+                        {
+                            key?.DeleteValue("", false);
+                        }
+                    }
+
+                    if (!entry.AppKeyExisted)
+                    {
+                        using (RegistryKey appKey = Registry.CurrentUser.OpenSubKey(appPath))
+                        {
+                            if (appKey != null && appKey.SubKeyCount == 0 && appKey.ValueCount == 0)
+                            {
+                                appKey.Dispose();
+                                Registry.CurrentUser.DeleteSubKey(appPath, false);
+                            }
+                        }
+                    }
+                }
+                catch (Exception e)
+                {
+                    ShellLogger.Error($"VistaSoundScheme: could not restore {entry.Event}: {e.Message}");
+                }
+            }
+
+            try
+            {
+                File.Delete(BackupPath());
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaSoundScheme: could not delete the backup: {e.Message}");
+            }
+        }
+
+        private static string BackupPath()
+        {
+            return BackupFileName.InLocalAppData();
+        }
+
+        private static Backup ReadBackup()
+        {
+            string path = BackupPath();
+
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonSerializer.Deserialize<Backup>(File.ReadAllText(path));
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaSoundScheme: the backup could not be read: {e.Message}");
+                return null;
+            }
+        }
+
+        private static void WriteBackup(Backup backup)
+        {
+            string path = BackupPath();
+            string temporary = path + ".tmp";
+
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllText(temporary, JsonSerializer.Serialize(backup, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(temporary, path, true);
+        }
+
+        private static string FindSoundsDirectory()
+        {
+            // Beside the app, or where a single-file build unpacks it, then beside the executable
+            string[] candidates =
+            {
+                Path.Combine(AppContext.BaseDirectory, "Resources", "Sounds"),
+                Path.Combine(Path.GetDirectoryName(ExePath.GetExecutablePath()) ?? "", "Resources", "Sounds")
+            };
+
+            foreach (string candidate in candidates)
+            {
+                if (Directory.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Starts the watchdog so that it is not a child of this process: it is started through cmd, which ends at once,
+        /// so ending this process's tree (Task Manager's "End process tree") does not take it too.
+        /// </summary>
+        private static void StartWatchdog()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c start \"\" /b \"{ExePath.GetExecutablePath()}\" {RestoreArgument} {Environment.ProcessId}",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                })?.Dispose();
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaSoundScheme: could not start the watchdog: {e.Message}");
+            }
+        }
+
+        /// <summary>Orders Apply, Restore and the watchdog across processes.</summary>
+        private sealed class SoundLock : IDisposable
+        {
+            private readonly Mutex _mutex = new Mutex(false, LockName);
+            private bool _held;
+
+            public SoundLock()
+            {
+                try
+                {
+                    _held = _mutex.WaitOne(TimeSpan.FromSeconds(5));
+                }
+                catch (AbandonedMutexException)
+                {
+                    // The holder ended without releasing it; the lock is ours
+                    _held = true;
+                }
+            }
+
+            public void Dispose()
+            {
+                if (_held)
+                {
+                    _mutex.ReleaseMutex();
+                }
+
+                _mutex.Dispose();
+            }
+        }
+    }
+}
+// <RETROSTAR_SOURCE_END path="RetroBar/Utilities/VistaSoundScheme.cs">
 
 // [1400] INPUT :: hotkeys, tray hotkeys, low-level mouse hook, delayed activation
 

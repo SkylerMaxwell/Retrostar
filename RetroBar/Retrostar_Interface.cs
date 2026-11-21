@@ -40,6 +40,7 @@ namespace RetroBar
         private readonly StartMenuMonitor _startMenuMonitor;
         private readonly Updater _updater;
         private readonly HotkeyManager _hotkeyManager;
+        private readonly VistaSoundScheme _vistaSounds = new VistaSoundScheme();
 
         public App()
         {
@@ -69,6 +70,7 @@ namespace RetroBar
 
             _dictionaryManager.SetLanguageFromSettings();
             loadTheme();
+            UpdateVistaSounds();
 
             // Created before the taskbars so their Start buttons can subscribe to it as they load
             _startMenuManager = new StartMenuManager();
@@ -104,6 +106,23 @@ namespace RetroBar
             else if (e.PropertyName == nameof(Settings.Theme) || e.PropertyName == nameof(Settings.TaskbarScale))
             {
                 setTaskIconSize();
+            }
+            else if (e.PropertyName == nameof(Settings.UseVistaSounds))
+            {
+                UpdateVistaSounds();
+            }
+        }
+
+        /// <summary>The Vista sounds play while Retrostar runs and the setting is on; otherwise Windows' own are in place.</summary>
+        private void UpdateVistaSounds()
+        {
+            if (Settings.Instance.UseVistaSounds)
+            {
+                _vistaSounds.Apply();
+            }
+            else
+            {
+                _vistaSounds.Restore();
             }
         }
 
@@ -154,6 +173,9 @@ namespace RetroBar
         private void ExitApp()
         {
             Settings.Instance.PropertyChanged -= Settings_PropertyChanged;
+
+            // First, so that the Windows sounds return even if something below fails
+            _vistaSounds.Dispose();
 
             _explorerMonitor.Dispose();
             _startMenuManager?.Dispose();
