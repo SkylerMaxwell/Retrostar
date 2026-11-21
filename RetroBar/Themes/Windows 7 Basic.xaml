@@ -1,35 +1,11 @@
 ﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:system="clr-namespace:System;assembly=mscorlib">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <!--
-        Windows 7 Basic: the opaque look Windows 7 used without desktop composition. The layout is Windows 7 Aero's;
-        only the colours differ, and they are the same ones Windows 7 Aero switches to while Aero glass is off.
+        Windows 7 Basic: Vista Basic's opaque taskbar with the Windows 7 superbar. Windows Vista Basic is merged last,
+        so its opaque brushes take precedence over the Aero ones that Windows 7 Aero brings in.
     -->
     <ResourceDictionary.MergedDictionaries>
         <ResourceDictionary Source="Windows 7 Aero.xaml" />
+        <ResourceDictionary Source="Windows Vista Basic.xaml" />
     </ResourceDictionary.MergedDictionaries>
-
-    <system:Boolean x:Key="AllowsTransparency">False</system:Boolean>
-
-    <SolidColorBrush x:Key="TaskbarWindowBackground" Color="#A7C0DC" />
-    <SolidColorBrush x:Key="TaskbarBackground" Color="#A7C0DC" />
-    <SolidColorBrush x:Key="TaskbarVerticalBackground" Color="#A7C0DC" />
-    <SolidColorBrush x:Key="TaskbarTopBorder" Color="#434D58" />
-    <SolidColorBrush x:Key="TaskbarTopInnerBorder" Color="#CAD9EA" />
-
-    <SolidColorBrush x:Key="ClockForeground" Color="#000000" />
-    <SolidColorBrush x:Key="InputLanguageForeground" Color="#000000" />
-    <SolidColorBrush x:Key="TrayToggleArrowForeground" Color="#1E2833" />
-
-    <SolidColorBrush x:Key="ShowDesktopOuterBorder" Color="#FF6A7B8F" />
-    <SolidColorBrush x:Key="ShowDesktopInnerBorder" Color="#FFE6EEF7" />
-    <LinearGradientBrush x:Key="ShowDesktopBackground" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#FFD3E0EF" Offset="0.0" />
-        <GradientStop Color="#FFB2C9E2" Offset="1.0" />
-    </LinearGradientBrush>
-    <LinearGradientBrush x:Key="ShowDesktopBackgroundHover" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#FFF2F7FC" Offset="0.0" />
-        <GradientStop Color="#FFCFDFF1" Offset="1.0" />
-    </LinearGradientBrush>
-    <SolidColorBrush x:Key="ShowDesktopGloss" Color="Transparent" />
 </ResourceDictionary>

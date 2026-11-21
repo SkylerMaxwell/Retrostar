@@ -2,361 +2,17 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:system="clr-namespace:System;assembly=mscorlib">
     <!--
-        Windows 7 (Aero, the default "Sky" colour). Built on Windows Vista Aero, which supplies the tooltips, balloons,
-        menus and tray details Windows 7 kept; everything Windows 7 changed is redefined here.
-        Geometry is measured from Windows 7 at 100% scale: a 40 px bar, 62 px button slots (a 60 px button and a 2 px gap),
-        a 54 px Start orb, a two-line clock and a 15 px Show Desktop strip at the far end.
-        While "Enable Aero glass" is off, every part switches to the opaque Windows 7 Basic look (the *Basic keys).
+        Windows 7 Aero. Until measured Windows 7 taskbar images are supplied, the taskbar is Vista's exactly
+        (background, Start orb, tray, clock, glass) and this theme adds only the superbar: Windows 7's icon-only
+        buttons, pinned programs first, drawn with the Vista task button brushes at Vista's height.
     -->
     <ResourceDictionary.MergedDictionaries>
         <ResourceDictionary Source="Windows Vista Aero.xaml" />
     </ResourceDictionary.MergedDictionaries>
 
-    <system:Double x:Key="TaskbarHeight">40</system:Double>
-    <system:Double x:Key="TaskbarRowHeight">40</system:Double>
-    <system:Double x:Key="TaskbarWidth">70</system:Double>
-    <system:Boolean x:Key="AllowsTransparency">True</system:Boolean>
-    <system:Boolean x:Key="AlternatesAppearanceWhenMaximized">False</system:Boolean>
-    <system:Boolean x:Key="UseFloatingStartButton">False</system:Boolean>
-    <system:Boolean x:Key="UseLargeIcons">True</system:Boolean>
     <system:Boolean x:Key="UseSuperbar">True</system:Boolean>
 
-    <!-- Taskbar: glass tinted with the Sky colour; a dark line and a light line along the top edge -->
-    <LinearGradientBrush x:Key="TaskbarBackground" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#802A5683" Offset="0.0" />
-        <GradientStop Color="#801C4A7A" Offset="0.5" />
-        <GradientStop Color="#8C143D66" Offset="1.0" />
-    </LinearGradientBrush>
-    <LinearGradientBrush x:Key="TaskbarVerticalBackground" StartPoint="0,0" EndPoint="1,0">
-        <GradientStop Color="#802A5683" Offset="0.0" />
-        <GradientStop Color="#801C4A7A" Offset="0.5" />
-        <GradientStop Color="#8C143D66" Offset="1.0" />
-    </LinearGradientBrush>
-    <SolidColorBrush x:Key="TaskbarTopBorder" Color="#8C000000" />
-    <SolidColorBrush x:Key="TaskbarTopInnerBorder" Color="#7FE0E6EE" />
-
-    <!-- Windows 7 Basic taskbar, measured: dark line, light line, flat light blue -->
-    <SolidColorBrush x:Key="TaskbarBackgroundBasic" Color="#A7C0DC" />
-    <SolidColorBrush x:Key="TaskbarTopBorderBasic" Color="#434D58" />
-    <SolidColorBrush x:Key="TaskbarTopInnerBorderBasic" Color="#CAD9EA" />
-
-    <SolidColorBrush x:Key="ClockForeground" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="ClockForegroundBasic" Color="#000000" />
-    <SolidColorBrush x:Key="InputLanguageForegroundBasic" Color="#000000" />
-    <SolidColorBrush x:Key="TrayToggleArrowForeground" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="TrayToggleArrowForegroundBasic" Color="#1E2833" />
-
-    <ToolTip x:Key="StartButtonTip" Content="{DynamicResource start_button_tip_vista}" />
-
-    <Style TargetType="ContentControl"
-           x:Key="Taskbar"
-           BasedOn="{StaticResource Taskbar}">
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="ContentControl">
-                    <Grid>
-                        <!-- Glass tint layer, faded by the Aero glass transparency setting; the content is drawn over it -->
-                        <Border BorderThickness="0,1,0,0"
-                                BorderBrush="{DynamicResource TaskbarTopBorder}"
-                                Opacity="{Binding Path=GlassTintOpacity, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                                x:Name="TaskbarTopBorder">
-                            <Border BorderThickness="0,1,0,0"
-                                    BorderBrush="{DynamicResource TaskbarTopInnerBorder}"
-                                    Background="{DynamicResource TaskbarBackground}"
-                                    x:Name="TaskbarTopInnerBorder" />
-                        </Border>
-                        <!-- Buttons cover the two top lines, as in Windows 7 -->
-                        <ContentPresenter Name="Content" />
-                    </Grid>
-                    <ControlTemplate.Triggers>
-                        <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                                     Value="Vertical">
-                            <DataTrigger.Setters>
-                                <Setter TargetName="TaskbarTopBorder"
-                                        Property="BorderThickness"
-                                        Value="1,0,0,0" />
-                                <Setter TargetName="TaskbarTopInnerBorder"
-                                        Property="BorderThickness"
-                                        Value="1,0,0,0" />
-                                <Setter TargetName="TaskbarTopInnerBorder"
-                                        Property="Background"
-                                        Value="{DynamicResource TaskbarVerticalBackground}" />
-                            </DataTrigger.Setters>
-                        </DataTrigger>
-                        <!-- Aero glass turned off: the opaque Windows 7 Basic look -->
-                        <DataTrigger Binding="{Binding Path=IsAeroGlassEnabled, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                                     Value="False">
-                            <DataTrigger.Setters>
-                                <Setter TargetName="TaskbarTopBorder"
-                                        Property="BorderBrush"
-                                        Value="{DynamicResource TaskbarTopBorderBasic}" />
-                                <Setter TargetName="TaskbarTopInnerBorder"
-                                        Property="BorderBrush"
-                                        Value="{DynamicResource TaskbarTopInnerBorderBasic}" />
-                                <Setter TargetName="TaskbarTopInnerBorder"
-                                        Property="Background"
-                                        Value="{DynamicResource TaskbarBackgroundBasic}" />
-                            </DataTrigger.Setters>
-                        </DataTrigger>
-                    </ControlTemplate.Triggers>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-    </Style>
-
-    <!--
-        Start orb: a 54 px button holding a 37 px glass sphere with the four-colour flag, vertically centred in the bar.
-        It lights up on hover and darkens while pressed or while the Start menu is open.
-    -->
-    <Style TargetType="ToggleButton"
-           x:Key="StartButton">
-        <Setter Property="OverridesDefaultStyle"
-                Value="True" />
-        <Setter Property="Width"
-                Value="54" />
-        <Setter Property="Height"
-                Value="40" />
-        <Setter Property="Margin"
-                Value="0,0,6,0" />
-        <Setter Property="HorizontalAlignment"
-                Value="Left" />
-        <Setter Property="VerticalAlignment"
-                Value="Center" />
-        <Setter Property="FocusVisualStyle"
-                Value="{x:Null}" />
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="ToggleButton">
-                    <Grid Background="Transparent"
-                          FlowDirection="LeftToRight">
-                        <ContentPresenter Visibility="Collapsed" />
-                        <Canvas Width="54"
-                                Height="40"
-                                HorizontalAlignment="Center"
-                                VerticalAlignment="Center">
-                            <!-- Hover halo around the orb -->
-                            <Ellipse x:Name="Halo"
-                                     Canvas.Left="5"
-                                     Canvas.Top="-2"
-                                     Width="44"
-                                     Height="44"
-                                     Opacity="0">
-                                <Ellipse.Fill>
-                                    <RadialGradientBrush>
-                                        <GradientStop Color="#0088DDFF" Offset="0.70" />
-                                        <GradientStop Color="#9088DDFF" Offset="0.80" />
-                                        <GradientStop Color="#0088DDFF" Offset="1.0" />
-                                    </RadialGradientBrush>
-                                </Ellipse.Fill>
-                            </Ellipse>
-                            <!-- Dark rim -->
-                            <Ellipse Canvas.Left="8.5"
-                                     Canvas.Top="1.5"
-                                     Width="37"
-                                     Height="37"
-                                     Fill="#E6061A30" />
-                            <!-- Glass sphere, lit from below -->
-                            <Ellipse Canvas.Left="9.5"
-                                     Canvas.Top="2.5"
-                                     Width="35"
-                                     Height="35">
-                                <Ellipse.Fill>
-                                    <RadialGradientBrush GradientOrigin="0.5,1.0"
-                                                         Center="0.5,0.78"
-                                                         RadiusX="0.78"
-                                                         RadiusY="0.78">
-                                        <GradientStop Color="#FF5FE0FF" Offset="0.0" />
-                                        <GradientStop Color="#FF2A8FD6" Offset="0.32" />
-                                        <GradientStop Color="#FF0F4E8E" Offset="0.62" />
-                                        <GradientStop Color="#FF082C55" Offset="0.85" />
-                                        <GradientStop Color="#FF061F3E" Offset="1.0" />
-                                    </RadialGradientBrush>
-                                </Ellipse.Fill>
-                            </Ellipse>
-                            <!-- Flag: four waving panes -->
-                            <Path Data="M 17.6,13.0 C 19.9,11.8 22.6,11.9 25.6,13.4 L 24.8,19.7 C 22.0,18.3 19.5,18.2 17.0,19.4 Z">
-                                <Path.Fill>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                        <GradientStop Color="#FFFF9A5A" Offset="0.0" />
-                                        <GradientStop Color="#FFF2541B" Offset="1.0" />
-                                    </LinearGradientBrush>
-                                </Path.Fill>
-                            </Path>
-                            <Path Data="M 26.4,13.7 C 29.3,15.2 31.9,15.3 34.6,13.9 L 33.9,20.1 C 31.3,21.4 28.6,21.2 25.6,20.0 Z">
-                                <Path.Fill>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                        <GradientStop Color="#FFC4F05A" Offset="0.0" />
-                                        <GradientStop Color="#FF6CB100" Offset="1.0" />
-                                    </LinearGradientBrush>
-                                </Path.Fill>
-                            </Path>
-                            <Path Data="M 16.9,20.3 C 19.4,19.1 21.9,19.2 24.7,20.6 L 23.9,26.8 C 21.1,25.4 18.7,25.3 16.2,26.5 Z">
-                                <Path.Fill>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                        <GradientStop Color="#FF7FDCFF" Offset="0.0" />
-                                        <GradientStop Color="#FF0096E8" Offset="1.0" />
-                                    </LinearGradientBrush>
-                                </Path.Fill>
-                            </Path>
-                            <Path Data="M 25.5,20.9 C 28.5,22.1 31.2,22.3 33.8,21.0 L 33.0,27.2 C 30.4,28.5 27.7,28.3 24.7,27.1 Z">
-                                <Path.Fill>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                        <GradientStop Color="#FFFFE680" Offset="0.0" />
-                                        <GradientStop Color="#FFFFB300" Offset="1.0" />
-                                    </LinearGradientBrush>
-                                </Path.Fill>
-                            </Path>
-                            <!-- Gloss over the upper half -->
-                            <Path Data="M 11.5,18 C 11.5,9 18.5,3.5 27,3.5 C 35.5,3.5 42.5,9 42.5,18 C 38,15.5 32.5,14.5 27,14.5 C 21.5,14.5 16,15.5 11.5,18 Z">
-                                <Path.Fill>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                        <GradientStop Color="#B8FFFFFF" Offset="0.0" />
-                                        <GradientStop Color="#40FFFFFF" Offset="0.6" />
-                                        <GradientStop Color="#10FFFFFF" Offset="1.0" />
-                                    </LinearGradientBrush>
-                                </Path.Fill>
-                            </Path>
-                            <!-- Light inner ring -->
-                            <Ellipse Canvas.Left="9.5"
-                                     Canvas.Top="2.5"
-                                     Width="35"
-                                     Height="35"
-                                     Stroke="#59FFFFFF"
-                                     StrokeThickness="1" />
-                            <!-- Lights up on hover; darkens when pressed -->
-                            <Ellipse x:Name="StateOverlay"
-                                     Canvas.Left="9.5"
-                                     Canvas.Top="2.5"
-                                     Width="35"
-                                     Height="35"
-                                     Opacity="0">
-                                <Ellipse.Fill>
-                                    <RadialGradientBrush GradientOrigin="0.5,0.9"
-                                                         Center="0.5,0.7"
-                                                         RadiusX="0.8"
-                                                         RadiusY="0.8">
-                                        <GradientStop Color="#A080E8FF" Offset="0.0" />
-                                        <GradientStop Color="#4040B0FF" Offset="0.6" />
-                                        <GradientStop Color="#1040B0FF" Offset="1.0" />
-                                    </RadialGradientBrush>
-                                </Ellipse.Fill>
-                            </Ellipse>
-                            <Ellipse x:Name="PressedOverlay"
-                                     Canvas.Left="9.5"
-                                     Canvas.Top="2.5"
-                                     Width="35"
-                                     Height="35"
-                                     Fill="#59001830"
-                                     Opacity="0" />
-                        </Canvas>
-                    </Grid>
-                    <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver"
-                                 Value="True">
-                            <Setter TargetName="StateOverlay"
-                                    Property="Opacity"
-                                    Value="1" />
-                            <Setter TargetName="Halo"
-                                    Property="Opacity"
-                                    Value="1" />
-                        </Trigger>
-                        <Trigger Property="IsChecked"
-                                 Value="True">
-                            <Setter TargetName="PressedOverlay"
-                                    Property="Opacity"
-                                    Value="1" />
-                            <Setter TargetName="StateOverlay"
-                                    Property="Opacity"
-                                    Value="0.6" />
-                        </Trigger>
-                        <Trigger Property="IsPressed"
-                                 Value="True">
-                            <Setter TargetName="PressedOverlay"
-                                    Property="Opacity"
-                                    Value="1" />
-                            <Setter TargetName="StateOverlay"
-                                    Property="Opacity"
-                                    Value="0.6" />
-                        </Trigger>
-                    </ControlTemplate.Triggers>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-        <Style.Triggers>
-            <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                         Value="Vertical">
-                <Setter Property="Margin"
-                        Value="0,0,0,2" />
-                <Setter Property="HorizontalAlignment"
-                        Value="Center" />
-            </DataTrigger>
-        </Style.Triggers>
-    </Style>
-
-    <!--
-        Superbar buttons. A slot is 62 px: a 60 px button and a 2 px gap. Each extra window draws a stacked edge
-        5 px to the right of the button, which narrows the button by the same amount.
-        A pinned program that is not running has no frame until it is hovered.
-    -->
-    <SolidColorBrush x:Key="SuperbarButtonOuterBorder" Color="#73000000" />
-    <LinearGradientBrush x:Key="SuperbarButtonInnerBorder" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#80FFFFFF" Offset="0.0" />
-        <GradientStop Color="#33FFFFFF" Offset="1.0" />
-    </LinearGradientBrush>
-    <LinearGradientBrush x:Key="SuperbarButtonBackground" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#40FFFFFF" Offset="0.0" />
-        <GradientStop Color="#1EFFFFFF" Offset="0.45" />
-        <GradientStop Color="#0DFFFFFF" Offset="0.46" />
-        <GradientStop Color="#1AFFFFFF" Offset="1.0" />
-    </LinearGradientBrush>
-
-    <SolidColorBrush x:Key="SuperbarButtonOuterBorderHover" Color="#80000000" />
-    <LinearGradientBrush x:Key="SuperbarButtonInnerBorderHover" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#B3FFFFFF" Offset="0.0" />
-        <GradientStop Color="#4DFFFFFF" Offset="1.0" />
-    </LinearGradientBrush>
-    <LinearGradientBrush x:Key="SuperbarButtonBackgroundHover" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#66FFFFFF" Offset="0.0" />
-        <GradientStop Color="#33FFFFFF" Offset="0.45" />
-        <GradientStop Color="#1AFFFFFF" Offset="0.46" />
-        <GradientStop Color="#26FFFFFF" Offset="1.0" />
-    </LinearGradientBrush>
-
-    <SolidColorBrush x:Key="SuperbarButtonOuterBorderActive" Color="#8C000000" />
-    <LinearGradientBrush x:Key="SuperbarButtonInnerBorderActive" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#CCFFFFFF" Offset="0.0" />
-        <GradientStop Color="#66FFFFFF" Offset="1.0" />
-    </LinearGradientBrush>
-    <LinearGradientBrush x:Key="SuperbarButtonBackgroundActive" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#80FFFFFF" Offset="0.0" />
-        <GradientStop Color="#4DFFFFFF" Offset="0.45" />
-        <GradientStop Color="#33FFFFFF" Offset="0.46" />
-        <GradientStop Color="#40FFFFFF" Offset="1.0" />
-    </LinearGradientBrush>
-
-    <SolidColorBrush x:Key="SuperbarButtonOuterBorderPressed" Color="#99000000" />
-    <SolidColorBrush x:Key="SuperbarButtonInnerBorderPressed" Color="#4DFFFFFF" />
-    <LinearGradientBrush x:Key="SuperbarButtonBackgroundPressed" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#26FFFFFF" Offset="0.0" />
-        <GradientStop Color="#0DFFFFFF" Offset="1.0" />
-    </LinearGradientBrush>
-
-    <SolidColorBrush x:Key="SuperbarButtonOuterBorderFlashing" Color="#B3613600" />
-    <LinearGradientBrush x:Key="SuperbarButtonInnerBorderFlashing" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#CCFFE7B0" Offset="0.0" />
-        <GradientStop Color="#80FFC66B" Offset="1.0" />
-    </LinearGradientBrush>
-    <LinearGradientBrush x:Key="SuperbarButtonBackgroundFlashing" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#E6FFC870" Offset="0.0" />
-        <GradientStop Color="#D9F5A43A" Offset="0.45" />
-        <GradientStop Color="#D9EA8F1C" Offset="0.46" />
-        <GradientStop Color="#E6F4A93F" Offset="1.0" />
-    </LinearGradientBrush>
-
-    <SolidColorBrush x:Key="SuperbarStackOuterBorder" Color="#59000000" />
-    <SolidColorBrush x:Key="SuperbarStackInnerBorder" Color="#40FFFFFF" />
-    <SolidColorBrush x:Key="SuperbarStackBackground" Color="#14FFFFFF" />
-
+    <!-- Progress shown by a program, drawn across its button as Windows 7 does -->
     <LinearGradientBrush x:Key="SuperbarProgressNormal" StartPoint="0,0" EndPoint="0,1">
         <GradientStop Color="#B07AE85A" Offset="0.0" />
         <GradientStop Color="#9940C030" Offset="0.5" />
@@ -374,9 +30,9 @@
     <Style TargetType="Image"
            x:Key="SuperbarIcon">
         <Setter Property="Width"
-                Value="32" />
+                Value="16" />
         <Setter Property="Height"
-                Value="32" />
+                Value="16" />
         <Setter Property="HorizontalAlignment"
                 Value="Center" />
         <Setter Property="VerticalAlignment"
@@ -388,17 +44,22 @@
     <Style TargetType="Image"
            x:Key="SuperbarOverlayIcon">
         <Setter Property="Width"
-                Value="16" />
+                Value="10" />
         <Setter Property="Height"
-                Value="16" />
+                Value="10" />
         <Setter Property="HorizontalAlignment"
                 Value="Center" />
         <Setter Property="VerticalAlignment"
                 Value="Center" />
         <Setter Property="Margin"
-                Value="24,24,0,0" />
+                Value="12,12,0,0" />
     </Style>
 
+    <!--
+        Superbar buttons: a 40 px button and Vista's 2 px gap, in Vista's 30 px row. The frame is Vista's task button
+        frame; a pinned program that is not running has none until it is hovered. Each extra window draws a stacked
+        edge 4 px to the right, which narrows the button by the same amount.
+    -->
     <Style TargetType="Button"
            x:Key="SuperbarButton">
         <Setter Property="OverridesDefaultStyle"
@@ -406,78 +67,71 @@
         <Setter Property="FocusVisualStyle"
                 Value="{x:Null}" />
         <Setter Property="Width"
-                Value="62" />
+                Value="42" />
         <Setter Property="Height"
-                Value="40" />
+                Value="30" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
                     <Grid Background="Transparent"
-                          Margin="0,0,2,0"
+                          Margin="0,1,2,1"
                           x:Name="Slot">
                         <Border x:Name="Stack2"
-                                Margin="10,0,0,0"
+                                Margin="8,0,0,0"
                                 Visibility="Collapsed"
                                 CornerRadius="3"
                                 BorderThickness="1"
-                                BorderBrush="{DynamicResource SuperbarStackOuterBorder}">
+                                BorderBrush="{DynamicResource TaskButtonOuterBorder}">
                             <Border CornerRadius="2"
                                     BorderThickness="1"
-                                    BorderBrush="{DynamicResource SuperbarStackInnerBorder}"
-                                    Background="{DynamicResource SuperbarStackBackground}" />
+                                    BorderBrush="{DynamicResource TaskButtonInnerBorder}"
+                                    Background="{DynamicResource TaskButtonBackground}" />
                         </Border>
                         <Border x:Name="Stack1"
-                                Margin="5,0,0,0"
+                                Margin="4,0,0,0"
                                 Visibility="Collapsed"
                                 CornerRadius="3"
                                 BorderThickness="1"
-                                BorderBrush="{DynamicResource SuperbarStackOuterBorder}">
+                                BorderBrush="{DynamicResource TaskButtonOuterBorder}">
                             <Border CornerRadius="2"
                                     BorderThickness="1"
-                                    BorderBrush="{DynamicResource SuperbarStackInnerBorder}"
-                                    Background="{DynamicResource SuperbarStackBackground}" />
+                                    BorderBrush="{DynamicResource TaskButtonInnerBorder}"
+                                    Background="{DynamicResource TaskButtonBackground}" />
                         </Border>
                         <Grid x:Name="Main">
                             <Border x:Name="Outer"
                                     CornerRadius="3"
                                     BorderThickness="1"
-                                    BorderBrush="Transparent">
+                                    BorderBrush="Transparent"
+                                    Background="Transparent">
                                 <Border x:Name="Inner"
                                         CornerRadius="2"
                                         BorderThickness="1"
                                         BorderBrush="Transparent"
                                         Background="Transparent"
                                         ClipToBounds="True">
-                                    <Grid>
-                                        <!-- Progress shown by the program, drawn across the button -->
-                                        <Rectangle x:Name="Progress"
-                                                   Visibility="Collapsed"
-                                                   Fill="{DynamicResource SuperbarProgressNormal}"
-                                                   RenderTransformOrigin="0,0.5">
-                                            <Rectangle.RenderTransform>
-                                                <ScaleTransform ScaleX="{Binding Path=ProgressFraction, Mode=OneWay}" />
-                                            </Rectangle.RenderTransform>
-                                        </Rectangle>
-                                        <!-- Hover glow in the icon's colour, following the mouse -->
-                                        <Border x:Name="Glow"
-                                                Opacity="0">
-                                            <Border.Background>
-                                                <SolidColorBrush Color="{Binding Path=HotTrackColor, Mode=OneWay}" />
-                                            </Border.Background>
-                                            <Border.OpacityMask>
-                                                <RadialGradientBrush Center="{Binding Path=HotTrackCenter, Mode=OneWay}"
-                                                                     GradientOrigin="{Binding Path=HotTrackCenter, Mode=OneWay}"
-                                                                     RadiusX="0.75"
-                                                                     RadiusY="0.95">
-                                                    <GradientStop Color="#FFFFFFFF" Offset="0.0" />
-                                                    <GradientStop Color="#00FFFFFF" Offset="1.0" />
-                                                </RadialGradientBrush>
-                                            </Border.OpacityMask>
+                                    <Border x:Name="InnerTopRight"
+                                            CornerRadius="2"
+                                            BorderThickness="0,1,1,0"
+                                            BorderBrush="Transparent">
+                                        <Border x:Name="InnerBottomLeft"
+                                                CornerRadius="2"
+                                                BorderThickness="1,0,0,1"
+                                                BorderBrush="Transparent">
+                                            <Rectangle x:Name="Progress"
+                                                       Visibility="Collapsed"
+                                                       Fill="{DynamicResource SuperbarProgressNormal}"
+                                                       RenderTransformOrigin="0,0.5">
+                                                <Rectangle.RenderTransform>
+                                                    <ScaleTransform ScaleX="{Binding Path=ProgressFraction, Mode=OneWay}" />
+                                                </Rectangle.RenderTransform>
+                                            </Rectangle>
                                         </Border>
-                                    </Grid>
+                                    </Border>
                                 </Border>
                             </Border>
-                            <ContentPresenter HorizontalAlignment="Center"
+                            <ContentPresenter x:Name="Content"
+                                              HorizontalAlignment="Center"
                                               VerticalAlignment="Center" />
                         </Grid>
                     </Grid>
@@ -486,13 +140,19 @@
                                      Value="True">
                             <Setter TargetName="Outer"
                                     Property="BorderBrush"
-                                    Value="{DynamicResource SuperbarButtonOuterBorder}" />
+                                    Value="{DynamicResource TaskButtonOuterBorder}" />
                             <Setter TargetName="Inner"
                                     Property="BorderBrush"
-                                    Value="{DynamicResource SuperbarButtonInnerBorder}" />
+                                    Value="{DynamicResource TaskButtonInnerBorder}" />
                             <Setter TargetName="Inner"
                                     Property="Background"
-                                    Value="{DynamicResource SuperbarButtonBackground}" />
+                                    Value="{DynamicResource TaskButtonBackground}" />
+                            <Setter TargetName="InnerTopRight"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonInnerTopRightBorder}" />
+                            <Setter TargetName="InnerBottomLeft"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonInnerBottomLeftBorder}" />
                         </DataTrigger>
                         <DataTrigger Binding="{Binding Path=HasStack}"
                                      Value="True">
@@ -501,7 +161,7 @@
                                     Value="Visible" />
                             <Setter TargetName="Main"
                                     Property="Margin"
-                                    Value="0,0,5,0" />
+                                    Value="0,0,4,0" />
                         </DataTrigger>
                         <DataTrigger Binding="{Binding Path=HasDoubleStack}"
                                      Value="True">
@@ -510,35 +170,133 @@
                                     Value="Visible" />
                             <Setter TargetName="Stack1"
                                     Property="Margin"
-                                    Value="5,0,5,0" />
+                                    Value="4,0,4,0" />
                             <Setter TargetName="Main"
                                     Property="Margin"
-                                    Value="0,0,10,0" />
+                                    Value="0,0,8,0" />
                         </DataTrigger>
+                        <Trigger Property="IsMouseOver"
+                                 Value="True">
+                            <Setter TargetName="Outer"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonOuterBorderHover}" />
+                            <Setter TargetName="Outer"
+                                    Property="Background"
+                                    Value="{DynamicResource TaskButtonBottomBackgroundHover}" />
+                            <Setter TargetName="Inner"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonInnerBorderHover}" />
+                            <Setter TargetName="Inner"
+                                    Property="Background"
+                                    Value="{DynamicResource TaskButtonBackgroundHover}" />
+                            <Setter TargetName="InnerTopRight"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonInnerTopRightBorderHover}" />
+                            <Setter TargetName="InnerTopRight"
+                                    Property="BorderThickness"
+                                    Value="1,1,1,0" />
+                            <Setter TargetName="InnerBottomLeft"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonInnerBottomLeftBorderHover}" />
+                            <Setter TargetName="InnerBottomLeft"
+                                    Property="BorderThickness"
+                                    Value="0,0,0,1" />
+                        </Trigger>
                         <DataTrigger Binding="{Binding Path=IsActive}"
                                      Value="True">
                             <Setter TargetName="Outer"
                                     Property="BorderBrush"
-                                    Value="{DynamicResource SuperbarButtonOuterBorderActive}" />
+                                    Value="{DynamicResource TaskButtonOuterBorderActive}" />
+                            <Setter TargetName="Outer"
+                                    Property="Background"
+                                    Value="Transparent" />
                             <Setter TargetName="Inner"
                                     Property="BorderBrush"
-                                    Value="{DynamicResource SuperbarButtonInnerBorderActive}" />
+                                    Value="{DynamicResource TaskButtonInnerBorderActive}" />
                             <Setter TargetName="Inner"
                                     Property="Background"
-                                    Value="{DynamicResource SuperbarButtonBackgroundActive}" />
+                                    Value="{DynamicResource TaskButtonBackgroundActive}" />
+                            <Setter TargetName="InnerTopRight"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonInnerTopRightBorderActive}" />
+                            <Setter TargetName="InnerTopRight"
+                                    Property="BorderThickness"
+                                    Value="0,1,1,0" />
+                            <Setter TargetName="InnerBottomLeft"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonInnerBottomLeftBorderActive}" />
+                            <Setter TargetName="InnerBottomLeft"
+                                    Property="BorderThickness"
+                                    Value="1,0,0,1" />
                         </DataTrigger>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding Path=IsActive}"
+                                           Value="True" />
+                                <Condition Binding="{Binding Path=IsMouseOver, RelativeSource={RelativeSource TemplatedParent}}"
+                                           Value="True" />
+                            </MultiDataTrigger.Conditions>
+                            <Setter TargetName="Inner"
+                                    Property="Background"
+                                    Value="{DynamicResource TaskButtonBackgroundActiveHover}" />
+                            <Setter TargetName="InnerTopRight"
+                                    Property="Background"
+                                    Value="{DynamicResource TaskButtonBottomBackgroundActiveHover}" />
+                        </MultiDataTrigger>
                         <DataTrigger Binding="{Binding Path=IsFlashing}"
                                      Value="True">
                             <Setter TargetName="Outer"
                                     Property="BorderBrush"
-                                    Value="{DynamicResource SuperbarButtonOuterBorderFlashing}" />
+                                    Value="{DynamicResource TaskButtonOuterBorderFlashing}" />
+                            <Setter TargetName="Outer"
+                                    Property="Background"
+                                    Value="{DynamicResource TaskButtonBottomBackgroundFlashing}" />
                             <Setter TargetName="Inner"
                                     Property="BorderBrush"
-                                    Value="{DynamicResource SuperbarButtonInnerBorderFlashing}" />
+                                    Value="{DynamicResource TaskButtonInnerBorderFlashing}" />
                             <Setter TargetName="Inner"
                                     Property="Background"
-                                    Value="{DynamicResource SuperbarButtonBackgroundFlashing}" />
+                                    Value="{DynamicResource TaskButtonBackgroundFlashing}" />
+                            <Setter TargetName="InnerTopRight"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonInnerTopRightBorderFlashing}" />
+                            <Setter TargetName="InnerTopRight"
+                                    Property="BorderThickness"
+                                    Value="1,1,1,0" />
+                            <Setter TargetName="InnerTopRight"
+                                    Property="Background"
+                                    Value="Transparent" />
+                            <Setter TargetName="InnerBottomLeft"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonInnerBottomLeftBorderFlashing}" />
+                            <Setter TargetName="InnerBottomLeft"
+                                    Property="BorderThickness"
+                                    Value="0,0,0,1" />
                         </DataTrigger>
+                        <Trigger Property="IsPressed"
+                                 Value="True">
+                            <Setter TargetName="Outer"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonOuterBorderActive}" />
+                            <Setter TargetName="Outer"
+                                    Property="Background"
+                                    Value="Transparent" />
+                            <Setter TargetName="Inner"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonInnerBorderActive}" />
+                            <Setter TargetName="Inner"
+                                    Property="Background"
+                                    Value="{DynamicResource TaskButtonBackgroundActive}" />
+                            <Setter TargetName="InnerTopRight"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonInnerTopRightBorderActive}" />
+                            <Setter TargetName="InnerBottomLeft"
+                                    Property="BorderBrush"
+                                    Value="{DynamicResource TaskButtonInnerBottomLeftBorderActive}" />
+                            <Setter TargetName="Content"
+                                    Property="Margin"
+                                    Value="1,1,0,0" />
+                        </Trigger>
                         <DataTrigger Binding="{Binding Path=ShowsProgress}"
                                      Value="True">
                             <Setter TargetName="Progress"
@@ -557,439 +315,30 @@
                                     Property="Fill"
                                     Value="{DynamicResource SuperbarProgressError}" />
                         </DataTrigger>
-                        <Trigger Property="IsMouseOver"
-                                 Value="True">
-                            <Setter TargetName="Outer"
-                                    Property="BorderBrush"
-                                    Value="{DynamicResource SuperbarButtonOuterBorderHover}" />
-                            <Setter TargetName="Inner"
-                                    Property="BorderBrush"
-                                    Value="{DynamicResource SuperbarButtonInnerBorderHover}" />
-                            <Setter TargetName="Inner"
-                                    Property="Background"
-                                    Value="{DynamicResource SuperbarButtonBackgroundHover}" />
-                            <Setter TargetName="Glow"
-                                    Property="Opacity"
-                                    Value="{DynamicResource SuperbarGlowOpacity}" />
-                        </Trigger>
-                        <Trigger Property="IsPressed"
-                                 Value="True">
-                            <Setter TargetName="Outer"
-                                    Property="BorderBrush"
-                                    Value="{DynamicResource SuperbarButtonOuterBorderPressed}" />
-                            <Setter TargetName="Inner"
-                                    Property="BorderBrush"
-                                    Value="{DynamicResource SuperbarButtonInnerBorderPressed}" />
-                            <Setter TargetName="Inner"
-                                    Property="Background"
-                                    Value="{DynamicResource SuperbarButtonBackgroundPressed}" />
-                        </Trigger>
                         <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
                                      Value="Vertical">
                             <Setter TargetName="Slot"
                                     Property="Margin"
-                                    Value="0,0,0,2" />
+                                    Value="1,0,1,2" />
                         </DataTrigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
         <Style.Triggers>
+            <!-- On a vertical taskbar each button fills the bar's width, as Vista's task buttons do -->
             <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
                          Value="Vertical">
                 <Setter Property="Width"
-                        Value="60" />
+                        Value="{Binding Path=ViewportWidth, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type ScrollViewer}}}" />
                 <Setter Property="Height"
-                        Value="42" />
+                        Value="30" />
             </DataTrigger>
         </Style.Triggers>
     </Style>
-    <system:Double x:Key="SuperbarGlowOpacity">0.8</system:Double>
 
-    <!--
-        Windows 7 Basic buttons, measured: a dark outline darkest at the top, a light inner line, and a light blue fill
-        brightest at the top left. Same template; only the brushes differ.
-    -->
+    <!-- Windows 7 Basic draws the same buttons over Vista Basic's opaque taskbar -->
     <Style TargetType="Button"
            x:Key="SuperbarButtonBasic"
-           BasedOn="{StaticResource SuperbarButton}">
-        <Style.Resources>
-            <LinearGradientBrush x:Key="SuperbarButtonOuterBorder" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FF0D0F12" Offset="0.0" />
-                <GradientStop Color="#FF21262C" Offset="0.08" />
-                <GradientStop Color="#FF2B3239" Offset="0.28" />
-                <GradientStop Color="#FF4F5A68" Offset="0.53" />
-                <GradientStop Color="#FF647384" Offset="0.79" />
-                <GradientStop Color="#FF5A6877" Offset="1.0" />
-            </LinearGradientBrush>
-            <LinearGradientBrush x:Key="SuperbarButtonInnerBorder" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FFF6F8FB" Offset="0.0" />
-                <GradientStop Color="#FFECF1F7" Offset="0.1" />
-                <GradientStop Color="#FFDEE7F2" Offset="0.5" />
-                <GradientStop Color="#FFCCDBEB" Offset="0.85" />
-                <GradientStop Color="#FFC6D6E8" Offset="1.0" />
-            </LinearGradientBrush>
-            <LinearGradientBrush x:Key="SuperbarButtonBackground" StartPoint="0,0" EndPoint="0.37,1">
-                <GradientStop Color="#FFE7EEF5" Offset="0.0" />
-                <GradientStop Color="#FFD0DDEC" Offset="0.226" />
-                <GradientStop Color="#FFBBCEE4" Offset="0.44" />
-                <GradientStop Color="#FFAFC6DF" Offset="0.654" />
-                <GradientStop Color="#FFAEC5DF" Offset="0.75" />
-                <GradientStop Color="#FFAEC5DF" Offset="1.0" />
-            </LinearGradientBrush>
-
-            <SolidColorBrush x:Key="SuperbarButtonOuterBorderHover" Color="#FF3C4A5C" />
-            <LinearGradientBrush x:Key="SuperbarButtonInnerBorderHover" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FFFFFFFF" Offset="0.0" />
-                <GradientStop Color="#FFE3ECF7" Offset="1.0" />
-            </LinearGradientBrush>
-            <LinearGradientBrush x:Key="SuperbarButtonBackgroundHover" StartPoint="0,0" EndPoint="0.37,1">
-                <GradientStop Color="#FFF4F8FC" Offset="0.0" />
-                <GradientStop Color="#FFD4E2F2" Offset="0.44" />
-                <GradientStop Color="#FFC4D7EE" Offset="1.0" />
-            </LinearGradientBrush>
-
-            <SolidColorBrush x:Key="SuperbarButtonOuterBorderActive" Color="#FF1F252D" />
-            <LinearGradientBrush x:Key="SuperbarButtonInnerBorderActive" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FFB4C6DC" Offset="0.0" />
-                <GradientStop Color="#FFE8EFF7" Offset="1.0" />
-            </LinearGradientBrush>
-            <LinearGradientBrush x:Key="SuperbarButtonBackgroundActive" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FFC4D5EA" Offset="0.0" />
-                <GradientStop Color="#FFCFDDEE" Offset="0.5" />
-                <GradientStop Color="#FFDEE8F4" Offset="1.0" />
-            </LinearGradientBrush>
-
-            <SolidColorBrush x:Key="SuperbarButtonOuterBorderPressed" Color="#FF1F252D" />
-            <SolidColorBrush x:Key="SuperbarButtonInnerBorderPressed" Color="#FFA9BCD3" />
-            <LinearGradientBrush x:Key="SuperbarButtonBackgroundPressed" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FFB8CCE4" Offset="0.0" />
-                <GradientStop Color="#FFCCDBEC" Offset="1.0" />
-            </LinearGradientBrush>
-
-            <SolidColorBrush x:Key="SuperbarButtonOuterBorderFlashing" Color="#FF8A5C1E" />
-            <SolidColorBrush x:Key="SuperbarButtonInnerBorderFlashing" Color="#FFFFF4D8" />
-            <LinearGradientBrush x:Key="SuperbarButtonBackgroundFlashing" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FFFCE7B5" Offset="0.0" />
-                <GradientStop Color="#FFF7C76A" Offset="0.5" />
-                <GradientStop Color="#FFF4B649" Offset="1.0" />
-            </LinearGradientBrush>
-
-            <LinearGradientBrush x:Key="SuperbarStackOuterBorder" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FF54616F" Offset="0.0" />
-                <GradientStop Color="#FF6E7E91" Offset="1.0" />
-            </LinearGradientBrush>
-            <LinearGradientBrush x:Key="SuperbarStackInnerBorder" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FFC8D8E9" Offset="0.0" />
-                <GradientStop Color="#FFD0DEEC" Offset="1.0" />
-            </LinearGradientBrush>
-            <LinearGradientBrush x:Key="SuperbarStackBackground" StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FFBBCEE4" Offset="0.0" />
-                <GradientStop Color="#FFAEC5DF" Offset="1.0" />
-            </LinearGradientBrush>
-
-            <system:Double x:Key="SuperbarGlowOpacity">0.35</system:Double>
-        </Style.Resources>
-    </Style>
-
-    <!-- Two-line clock: time over the short date, centred, as Windows 7 shows it in a 40 px bar -->
-    <Style TargetType="TextBlock"
-           x:Key="Clock"
-           BasedOn="{StaticResource Clock}">
-        <Setter Property="Margin"
-                Value="15,0,6,0" />
-        <Setter Property="TextAlignment"
-                Value="Center" />
-        <Setter Property="HorizontalAlignment"
-                Value="Center" />
-        <Style.Triggers>
-            <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                         Value="Vertical">
-                <DataTrigger.Setters>
-                    <Setter Property="Margin"
-                            Value="0,1" />
-                </DataTrigger.Setters>
-            </DataTrigger>
-            <DataTrigger Binding="{Binding Path=IsAeroGlassEnabled, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                         Value="False">
-                <Setter Property="Foreground"
-                        Value="{DynamicResource ClockForegroundBasic}" />
-            </DataTrigger>
-        </Style.Triggers>
-    </Style>
-
-    <ControlTemplate TargetType="{x:Type UserControl}"
-                     x:Key="ClockTemplateKey">
-        <StackPanel Orientation="Vertical"
-                    VerticalAlignment="Center">
-            <TextBlock Text="{Binding Path=Now, StringFormat=t, Mode=OneWay}"
-                       Style="{DynamicResource Clock}"
-                       Name="ClockText" />
-            <TextBlock Text="{Binding Path=Now, StringFormat=dddd, Mode=OneWay}"
-                       Style="{DynamicResource Clock}"
-                       Name="ClockVerticalDayOfWeek"
-                       Visibility="Collapsed" />
-            <TextBlock Text="{Binding Path=Now, StringFormat=d, Mode=OneWay}"
-                       Style="{DynamicResource Clock}"
-                       Name="ClockDate" />
-        </StackPanel>
-        <ControlTemplate.Triggers>
-            <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                         Value="Vertical">
-                <Setter TargetName="ClockVerticalDayOfWeek"
-                        Property="Visibility"
-                        Value="Visible" />
-            </DataTrigger>
-        </ControlTemplate.Triggers>
-    </ControlTemplate>
-
-    <Style TargetType="TextBlock"
-           x:Key="InputLanguage"
-           BasedOn="{StaticResource InputLanguage}">
-        <Style.Triggers>
-            <DataTrigger Binding="{Binding Path=IsAeroGlassEnabled, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                         Value="False">
-                <Setter Property="Foreground"
-                        Value="{DynamicResource InputLanguageForegroundBasic}" />
-            </DataTrigger>
-        </Style.Triggers>
-    </Style>
-
-    <!-- Notification area icons sit 24 px apart -->
-    <Style TargetType="Image"
-           x:Key="NotifyIcon"
-           BasedOn="{StaticResource NotifyIcon}">
-        <Setter Property="Margin"
-                Value="4,1,4,1" />
-        <Style.Triggers>
-            <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                         Value="Vertical">
-                <DataTrigger.Setters>
-                    <Setter Property="Margin"
-                            Value="1,4" />
-                </DataTrigger.Setters>
-            </DataTrigger>
-        </Style.Triggers>
-    </Style>
-
-    <!-- "Show hidden icons": a small upward arrow -->
-    <Geometry x:Key="Windows7TrayArrow">M 0,4 L 3.5,0 L 7,4 Z</Geometry>
-
-    <Style TargetType="ToggleButton"
-           x:Key="TrayToggleButton">
-        <Setter Property="OverridesDefaultStyle"
-                Value="True" />
-        <Setter Property="Width"
-                Value="16" />
-        <Setter Property="Height"
-                Value="24" />
-        <Setter Property="Margin"
-                Value="0,0,5,0" />
-        <Setter Property="VerticalAlignment"
-                Value="Center" />
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="ToggleButton">
-                    <Border x:Name="ButtonBorder"
-                            Background="Transparent"
-                            BorderBrush="Transparent"
-                            BorderThickness="1"
-                            CornerRadius="2">
-                        <Path x:Name="ToggleArrow"
-                              Fill="{DynamicResource TrayToggleArrowForeground}"
-                              Data="{DynamicResource Windows7TrayArrow}"
-                              HorizontalAlignment="Center"
-                              VerticalAlignment="Center"
-                              RenderTransformOrigin="0.5,0.5" />
-                    </Border>
-                    <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver"
-                                 Value="True">
-                            <Setter TargetName="ButtonBorder"
-                                    Property="Background"
-                                    Value="#33FFFFFF" />
-                            <Setter TargetName="ButtonBorder"
-                                    Property="BorderBrush"
-                                    Value="#66FFFFFF" />
-                        </Trigger>
-                        <Trigger Property="IsPressed"
-                                 Value="True">
-                            <Setter TargetName="ButtonBorder"
-                                    Property="Background"
-                                    Value="#1A000000" />
-                        </Trigger>
-                        <Trigger Property="IsChecked"
-                                 Value="True">
-                            <Setter TargetName="ToggleArrow"
-                                    Property="RenderTransform">
-                                <Setter.Value>
-                                    <ScaleTransform ScaleY="-1" />
-                                </Setter.Value>
-                            </Setter>
-                        </Trigger>
-                        <DataTrigger Binding="{Binding Path=IsAeroGlassEnabled, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                                     Value="False">
-                            <Setter TargetName="ToggleArrow"
-                                    Property="Fill"
-                                    Value="{DynamicResource TrayToggleArrowForegroundBasic}" />
-                        </DataTrigger>
-                    </ControlTemplate.Triggers>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-        <Style.Triggers>
-            <Trigger Property="IsChecked" Value="True">
-                <Setter Property="ToolTip" Value="{DynamicResource hide}" />
-            </Trigger>
-            <Trigger Property="IsChecked" Value="False">
-                <Setter Property="ToolTip" Value="{DynamicResource show_hidden}" />
-            </Trigger>
-            <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                         Value="Vertical">
-                <DataTrigger.Setters>
-                    <Setter Property="Margin"
-                            Value="0,0,0,1" />
-                    <Setter Property="Width"
-                            Value="24" />
-                    <Setter Property="Height"
-                            Value="16" />
-                </DataTrigger.Setters>
-            </DataTrigger>
-        </Style.Triggers>
-    </Style>
-
-    <!-- The superbar fills the space up to the notification area -->
-    <Style x:Key="TaskListScrollViewer"
-           TargetType="ScrollViewer"
-           BasedOn="{StaticResource TaskListScrollViewer}">
-        <Setter Property="Margin"
-                Value="0,0,6,0" />
-        <Style.Triggers>
-            <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                         Value="Vertical">
-                <Setter Property="Margin"
-                        Value="0,0,0,6" />
-            </DataTrigger>
-        </Style.Triggers>
-    </Style>
-
-    <!--
-        Show Desktop: a 15 px glass strip at the far end of the bar, measured: dark outer and light inner lines on its
-        sides and bottom, and a gloss along the top. Hovering it peeks at the desktop when that is turned on.
-    -->
-    <SolidColorBrush x:Key="ShowDesktopOuterBorder" Color="#99000000" />
-    <SolidColorBrush x:Key="ShowDesktopInnerBorder" Color="#4DFFFFFF" />
-    <SolidColorBrush x:Key="ShowDesktopBackground" Color="#0DFFFFFF" />
-    <SolidColorBrush x:Key="ShowDesktopBackgroundHover" Color="#4DFFFFFF" />
-    <LinearGradientBrush x:Key="ShowDesktopGloss" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#66FFFFFF" Offset="0.0" />
-        <GradientStop Color="#00FFFFFF" Offset="1.0" />
-    </LinearGradientBrush>
-    <SolidColorBrush x:Key="ShowDesktopOuterBorderBasic" Color="#FF6A7B8F" />
-    <SolidColorBrush x:Key="ShowDesktopInnerBorderBasic" Color="#FFE6EEF7" />
-    <LinearGradientBrush x:Key="ShowDesktopBackgroundBasic" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#FFD3E0EF" Offset="0.0" />
-        <GradientStop Color="#FFB2C9E2" Offset="1.0" />
-    </LinearGradientBrush>
-    <LinearGradientBrush x:Key="ShowDesktopBackgroundHoverBasic" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#FFF2F7FC" Offset="0.0" />
-        <GradientStop Color="#FFCFDFF1" Offset="1.0" />
-    </LinearGradientBrush>
-
-    <Style TargetType="ToggleButton"
-           x:Key="ShowDesktopButton">
-        <Setter Property="OverridesDefaultStyle"
-                Value="True" />
-        <Setter Property="Background"
-                Value="Transparent" />
-        <Setter Property="FocusVisualStyle"
-                Value="{x:Null}" />
-        <Setter Property="Width"
-                Value="15" />
-        <Setter Property="HorizontalAlignment"
-                Value="Stretch" />
-        <Setter Property="VerticalAlignment"
-                Value="Stretch" />
-        <Setter Property="Margin"
-                Value="0,2,0,0" />
-        <Setter Property="Template">
-            <Setter.Value>
-                <ControlTemplate TargetType="ToggleButton">
-                    <Border x:Name="Outer"
-                            BorderThickness="1,0,1,1"
-                            BorderBrush="{DynamicResource ShowDesktopOuterBorder}">
-                        <Border x:Name="Inner"
-                                BorderThickness="1,0,1,1"
-                                BorderBrush="{DynamicResource ShowDesktopInnerBorder}"
-                                Background="{DynamicResource ShowDesktopBackground}">
-                            <Grid>
-                                <Border x:Name="Gloss"
-                                        Height="8"
-                                        VerticalAlignment="Top"
-                                        Background="{DynamicResource ShowDesktopGloss}" />
-                                <ContentPresenter Visibility="Collapsed" />
-                            </Grid>
-                        </Border>
-                    </Border>
-                    <ControlTemplate.Triggers>
-                        <Trigger Property="IsMouseOver"
-                                 Value="True">
-                            <Setter TargetName="Inner"
-                                    Property="Background"
-                                    Value="{DynamicResource ShowDesktopBackgroundHover}" />
-                        </Trigger>
-                        <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                                     Value="Vertical">
-                            <Setter TargetName="Outer"
-                                    Property="BorderThickness"
-                                    Value="0,1,1,1" />
-                            <Setter TargetName="Inner"
-                                    Property="BorderThickness"
-                                    Value="0,1,1,1" />
-                            <Setter TargetName="Gloss"
-                                    Property="Visibility"
-                                    Value="Collapsed" />
-                        </DataTrigger>
-                        <DataTrigger Binding="{Binding Path=IsAeroGlassEnabled, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                                     Value="False">
-                            <Setter TargetName="Outer"
-                                    Property="BorderBrush"
-                                    Value="{DynamicResource ShowDesktopOuterBorderBasic}" />
-                            <Setter TargetName="Inner"
-                                    Property="BorderBrush"
-                                    Value="{DynamicResource ShowDesktopInnerBorderBasic}" />
-                            <Setter TargetName="Inner"
-                                    Property="Background"
-                                    Value="{DynamicResource ShowDesktopBackgroundBasic}" />
-                            <Setter TargetName="Gloss"
-                                    Property="Visibility"
-                                    Value="Collapsed" />
-                        </DataTrigger>
-                        <MultiDataTrigger>
-                            <MultiDataTrigger.Conditions>
-                                <Condition Binding="{Binding Path=IsAeroGlassEnabled, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                                           Value="False" />
-                                <Condition Binding="{Binding Path=IsMouseOver, RelativeSource={RelativeSource Self}}"
-                                           Value="True" />
-                            </MultiDataTrigger.Conditions>
-                            <Setter TargetName="Inner"
-                                    Property="Background"
-                                    Value="{DynamicResource ShowDesktopBackgroundHoverBasic}" />
-                        </MultiDataTrigger>
-                    </ControlTemplate.Triggers>
-                </ControlTemplate>
-            </Setter.Value>
-        </Setter>
-        <Style.Triggers>
-            <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
-                         Value="Vertical">
-                <Setter Property="Width"
-                        Value="Auto" />
-                <Setter Property="Height"
-                        Value="15" />
-                <Setter Property="Margin"
-                        Value="2,0,0,0" />
-            </DataTrigger>
-        </Style.Triggers>
-    </Style>
+           BasedOn="{StaticResource SuperbarButton}" />
 </ResourceDictionary>

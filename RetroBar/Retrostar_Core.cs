@@ -3408,7 +3408,7 @@ namespace RetroBar.Utilities
 }
 // <RETROSTAR_SOURCE_END path="RetroBar/Utilities/ToolbarSorter.cs">
 
-// [1600] VISUAL EFFECTS :: Aero glass blur and the icon invert shader
+// [1600] VISUAL EFFECTS :: Retrostar's own Aero glass and the icon invert shader
 
 // <RETROSTAR_SOURCE_BEGIN path="RetroBar/Utilities/AeroGlassHelper.cs">
 namespace RetroBar.Utilities
@@ -3416,149 +3416,885 @@ namespace RetroBar.Utilities
     using ManagedShell.Common.Logging;
     using System;
     using System.Runtime.InteropServices;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using System.Windows;
+    using System.Windows.Interop;
+    using System.Windows.Media;
+    using System.Windows.Media.Imaging;
+    using System.Windows.Threading;
 
     /// <summary>
-    /// Applies a Windows Vista-style glass blur behind a window.
+    /// Retrostar's own Aero glass. Nothing here uses a Windows transparency effect: no accent policy, no system
+    /// backdrop, no DWM blur-behind. Each glass window owns an AeroGlassSurface, which reads the screen behind the
+    /// window with GDI, blurs it in code the way Vista's and Windows 7's glass did, and paints the result as the
+    /// window's background; the theme's tint is drawn over it. See Rules_For_Agent_Editors.md, rule 8.
     ///
-    /// Vista's DWM glass is a plain Gaussian blur of whatever is behind the window,
-    /// with the tint and gloss painted on top by the theme. On Windows 10 and 11 the
-    /// closest match is the ACCENT_ENABLE_BLURBEHIND accent state: it blurs without the
-    /// noise texture, luminosity layer and saturation boost that Acrylic adds.
-    /// The tint and highlights come from the theme's XAML brushes, as they did on Vista.
-    ///
-    /// Windows 11 can also draw its own material under a window (the system backdrop: Mica or Acrylic), round its
-    /// corners and add an accent-coloured border. None of those belong to Aero glass, so they are turned off
-    /// whenever glass is applied. ManagedShell's own blur is Acrylic or that system backdrop, so it is never used.
+    /// The screen is read with BitBlt without CAPTUREBLT, which leaves out layered windows. Every glass window is
+    /// layered (AllowsTransparency), so a surface never sees itself or another Retrostar window, while screenshots
+    /// and recordings, which include layered windows, show the bars as they are. Whether this Windows leaves layered
+    /// windows out is checked once at startup (CheckCaptureAsync); if it does not, the glass is drawn over an opaque
+    /// backing instead, so it never blurs itself.
     /// </summary>
     internal static class AeroGlassHelper
     {
-        private enum AccentState
-        {
-            ACCENT_DISABLED = 0,
-            ACCENT_ENABLE_BLURBEHIND = 3
-        }
-
-        private enum WindowCompositionAttribute
-        {
-            WCA_ACCENT_POLICY = 19
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct AccentPolicy
-        {
-            public AccentState AccentState;
-            public int AccentFlags;
-            public int GradientColor;
-            public int AnimationId;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct WindowCompositionAttributeData
-        {
-            public WindowCompositionAttribute Attribute;
-            public IntPtr Data;
-            public int SizeOfData;
-        }
-
-        [DllImport("user32.dll")]
-        private static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
-
-        [DllImport("dwmapi.dll")]
-        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
-
-        // Windows 11 window attributes (dwmapi.h)
-        private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
-        private const int DWMWA_BORDER_COLOR = 34;
-        private const int DWMWA_SYSTEMBACKDROP_TYPE = 38;
-        private const int DWMWA_MICA_EFFECT = 1029; // Windows 11 21H2, before DWMWA_SYSTEMBACKDROP_TYPE
-        private const int DWMWCP_DONOTROUND = 1;
-        private const int DWMSBT_NONE = 1;
-        private const uint DWMWA_COLOR_NONE = 0xFFFFFFFE;
+        // Side of the probe window used by the capture check, in device-independent pixels
+        private const double ProbeSize = 6;
+        private const int ProbeSettleMilliseconds = 150;
+        private const int ProbeAttempts = 3;
         private const int Windows11Build = 22000;
 
-        /// <summary>
-        /// The accent policy API used here exists on Windows 10 and later.
-        /// </summary>
-        public static bool IsSupported => Environment.OSVersion.Version.Major >= 10;
+        private static Task<bool> _captureCheck;
 
         /// <summary>
         /// Opacity of the tint every glass surface paints over the blur, set by the Aero glass transparency slider:
         /// 1 is the tint as each theme was measured, 0 leaves the blur alone. A surface uses it only while its glass is
-        /// on, through its window's GlassTintOpacity property; see Rules_For_Agent_Editors.md, rule 8.
+        /// live; its window's GlassTintOpacity property is set by the surface. See Rules_For_Agent_Editors.md, rule 8.
         /// </summary>
         public static double TintOpacity => 1.0 - Math.Clamp(Settings.Instance.AeroGlassTransparency, 0, 100) / 100.0;
 
-        public static void SetGlassBlur(IntPtr hwnd, bool enable)
+        /// <summary>Whether glass surfaces show what is behind them (live glass); otherwise they are opaque glass.</summary>
+        public static bool IsSeeThroughEnabled => Settings.Instance.EnableAeroGlass && Settings.Instance.AllowBlurBehind;
+
+        /// <summary>
+        /// Checks once whether reading the screen leaves out layered windows. Must be called on the UI thread;
+        /// later calls return the same result.
+        /// </summary>
+        public static Task<bool> CheckCaptureAsync()
         {
-            if (!IsSupported || hwnd == IntPtr.Zero)
-            {
-                return;
-            }
-
-            if (enable)
-            {
-                RemoveWindows11Effects(hwnd);
-            }
-
-            AccentPolicy accent = new AccentPolicy
-            {
-                AccentState = enable ? AccentState.ACCENT_ENABLE_BLURBEHIND : AccentState.ACCENT_DISABLED
-            };
-
-            int accentSize = Marshal.SizeOf(accent);
-            IntPtr accentPtr = Marshal.AllocHGlobal(accentSize);
-
-            try
-            {
-                Marshal.StructureToPtr(accent, accentPtr, false);
-
-                WindowCompositionAttributeData data = new WindowCompositionAttributeData
-                {
-                    Attribute = WindowCompositionAttribute.WCA_ACCENT_POLICY,
-                    Data = accentPtr,
-                    SizeOfData = accentSize
-                };
-
-                SetWindowCompositionAttribute(hwnd, ref data);
-            }
-            catch (Exception e)
-            {
-                ShellLogger.Warning($"AeroGlassHelper: Unable to set glass blur: {e.Message}");
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(accentPtr);
-            }
+            return _captureCheck ??= RunCaptureCheckAsync();
         }
 
         /// <summary>
-        /// Turns off Windows 11's own backdrop material, rounded corners and accent border on a glass window,
-        /// so only the plain blur and the theme's tint show. Earlier versions of Windows have none of these.
+        /// Shows a tiny layered probe window in two colours and reads the screen under it each time. If the colour
+        /// read never follows the probe, layered windows are left out of the capture.
         /// </summary>
-        private static void RemoveWindows11Effects(IntPtr hwnd)
+        private static async Task<bool> RunCaptureCheckAsync()
         {
-            if (Environment.OSVersion.Version.Build < Windows11Build)
+            Window probe = null;
+
+            try
+            {
+                Rect area = SystemParameters.WorkArea;
+                probe = new Window
+                {
+                    Title = string.Empty,
+                    WindowStyle = WindowStyle.None,
+                    AllowsTransparency = true,
+                    ResizeMode = ResizeMode.NoResize,
+                    ShowInTaskbar = false,
+                    ShowActivated = false,
+                    Topmost = true,
+                    Focusable = false,
+                    Width = ProbeSize,
+                    Height = ProbeSize,
+                    Left = area.Left,
+                    Top = area.Top,
+                    WindowStartupLocation = WindowStartupLocation.Manual,
+                    Background = Brushes.Red
+                };
+                probe.SourceInitialized += (sender, e) =>
+                {
+                    IntPtr hwnd = new WindowInteropHelper((Window)sender).Handle;
+                    int exStyle = Native.GetWindowLong(hwnd, Native.GWL_EXSTYLE);
+                    Native.SetWindowLong(hwnd, Native.GWL_EXSTYLE,
+                        exStyle | Native.WS_EX_TRANSPARENT | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE);
+                };
+                probe.Show();
+
+                IntPtr probeHandle = new WindowInteropHelper(probe).Handle;
+
+                for (int attempt = 0; attempt < ProbeAttempts; attempt++)
+                {
+                    probe.Background = Brushes.Red;
+                    int? red = await ReadProbePixelAsync(probeHandle);
+
+                    probe.Background = Brushes.Lime;
+                    int? lime = await ReadProbePixelAsync(probeHandle);
+
+                    if (red == null || lime == null)
+                    {
+                        break;
+                    }
+
+                    if (red == lime)
+                    {
+                        ShellLogger.Info("AeroGlassHelper: The screen is read without layered windows; live glass is available.");
+                        return true;
+                    }
+
+                    if (IsNear(red.Value, 0xFF0000) && IsNear(lime.Value, 0x00FF00))
+                    {
+                        break;
+                    }
+
+                    // Something behind the probe changed between the reads; try again
+                }
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Warning($"AeroGlassHelper: Unable to check screen capture: {e.Message}");
+            }
+            finally
+            {
+                probe?.Close();
+            }
+
+            ShellLogger.Warning("AeroGlassHelper: The screen cannot be read without layered windows; glass is drawn opaque.");
+            return false;
+        }
+
+        private static async Task<int?> ReadProbePixelAsync(IntPtr probeHandle)
+        {
+            await Task.Delay(ProbeSettleMilliseconds);
+
+            try
+            {
+                Native.DwmFlush();
+            }
+            catch (Exception)
+            {
+                // Without composition there is nothing to wait for
+            }
+
+            if (!Native.GetWindowRect(probeHandle, out Native.RECT rect))
+            {
+                return null;
+            }
+
+            int x = (rect.Left + rect.Right) / 2;
+            int y = (rect.Top + rect.Bottom) / 2;
+
+            using ScreenReader reader = new ScreenReader();
+            byte[] pixel = reader.Read(x, y, 1, 1);
+
+            if (pixel == null)
+            {
+                return null;
+            }
+
+            return (pixel[2] << 16) | (pixel[1] << 8) | pixel[0];
+        }
+
+        private static bool IsNear(int rgb, int expected)
+        {
+            for (int shift = 0; shift <= 16; shift += 8)
+            {
+                if (Math.Abs(((rgb >> shift) & 0xFF) - ((expected >> shift) & 0xFF)) > 24)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Turns off Windows 11's rounded corners, accent border and system backdrop on a glass window, so none of
+        /// Windows 11's own treatment is ever drawn with the glass. Earlier versions of Windows have none of these.
+        /// </summary>
+        internal static void PrepareWindow(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero || Environment.OSVersion.Version.Build < Windows11Build)
             {
                 return;
             }
 
             // Each attribute exists on some Windows 11 versions only; one that is not supported is simply refused
-            SetAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_NONE);
-            SetAttribute(hwnd, DWMWA_MICA_EFFECT, 0);
-            SetAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND);
-            SetAttribute(hwnd, DWMWA_BORDER_COLOR, unchecked((int)DWMWA_COLOR_NONE));
+            SetAttribute(hwnd, Native.DWMWA_SYSTEMBACKDROP_TYPE, Native.DWMSBT_NONE);
+            SetAttribute(hwnd, Native.DWMWA_MICA_EFFECT, 0);
+            SetAttribute(hwnd, Native.DWMWA_WINDOW_CORNER_PREFERENCE, Native.DWMWCP_DONOTROUND);
+            SetAttribute(hwnd, Native.DWMWA_BORDER_COLOR, unchecked((int)Native.DWMWA_COLOR_NONE));
         }
 
         private static void SetAttribute(IntPtr hwnd, int attribute, int value)
         {
             try
             {
-                DwmSetWindowAttribute(hwnd, attribute, ref value, sizeof(int));
+                Native.DwmSetWindowAttribute(hwnd, attribute, ref value, sizeof(int));
             }
             catch (Exception e)
             {
                 ShellLogger.Debug($"AeroGlassHelper: Unable to set window attribute {attribute}: {e.Message}");
             }
+        }
+
+        /// <summary>
+        /// Reads part of the screen into 32-bit BGRA pixels, top row first, keeping its bitmap between reads.
+        /// Layered windows are left out (no CAPTUREBLT). Not thread-safe; each user owns one.
+        /// </summary>
+        internal sealed class ScreenReader : IDisposable
+        {
+            private IntPtr _memoryDc;
+            private IntPtr _bitmap;
+            private IntPtr _oldBitmap;
+            private IntPtr _bits;
+            private int _width;
+            private int _height;
+
+            public byte[] Read(int x, int y, int width, int height)
+            {
+                if (width <= 0 || height <= 0)
+                {
+                    return null;
+                }
+
+                IntPtr screenDc = Native.GetDC(IntPtr.Zero);
+
+                if (screenDc == IntPtr.Zero)
+                {
+                    return null;
+                }
+
+                try
+                {
+                    if (!EnsureBitmap(screenDc, width, height))
+                    {
+                        return null;
+                    }
+
+                    if (!Native.BitBlt(_memoryDc, 0, 0, width, height, screenDc, x, y, Native.SRCCOPY))
+                    {
+                        return null;
+                    }
+
+                    Native.GdiFlush();
+
+                    byte[] pixels = new byte[width * height * 4];
+                    Marshal.Copy(_bits, pixels, 0, pixels.Length);
+                    return pixels;
+                }
+                finally
+                {
+                    Native.ReleaseDC(IntPtr.Zero, screenDc);
+                }
+            }
+
+            private bool EnsureBitmap(IntPtr screenDc, int width, int height)
+            {
+                if (_bitmap != IntPtr.Zero && width == _width && height == _height)
+                {
+                    return true;
+                }
+
+                ReleaseBitmap();
+
+                if (_memoryDc == IntPtr.Zero)
+                {
+                    _memoryDc = Native.CreateCompatibleDC(screenDc);
+
+                    if (_memoryDc == IntPtr.Zero)
+                    {
+                        return false;
+                    }
+                }
+
+                Native.BITMAPINFOHEADER header = new Native.BITMAPINFOHEADER
+                {
+                    biSize = (uint)Marshal.SizeOf<Native.BITMAPINFOHEADER>(),
+                    biWidth = width,
+                    biHeight = -height, // top row first
+                    biPlanes = 1,
+                    biBitCount = 32,
+                    biCompression = Native.BI_RGB
+                };
+
+                _bitmap = Native.CreateDIBSection(screenDc, ref header, Native.DIB_RGB_COLORS, out _bits, IntPtr.Zero, 0);
+
+                if (_bitmap == IntPtr.Zero || _bits == IntPtr.Zero)
+                {
+                    ReleaseBitmap();
+                    return false;
+                }
+
+                _oldBitmap = Native.SelectObject(_memoryDc, _bitmap);
+                _width = width;
+                _height = height;
+                return true;
+            }
+
+            private void ReleaseBitmap()
+            {
+                if (_bitmap == IntPtr.Zero)
+                {
+                    return;
+                }
+
+                if (_memoryDc != IntPtr.Zero && _oldBitmap != IntPtr.Zero)
+                {
+                    Native.SelectObject(_memoryDc, _oldBitmap);
+                }
+
+                Native.DeleteObject(_bitmap);
+                _bitmap = IntPtr.Zero;
+                _oldBitmap = IntPtr.Zero;
+                _bits = IntPtr.Zero;
+                _width = 0;
+                _height = 0;
+            }
+
+            public void Dispose()
+            {
+                ReleaseBitmap();
+
+                if (_memoryDc != IntPtr.Zero)
+                {
+                    Native.DeleteDC(_memoryDc);
+                    _memoryDc = IntPtr.Zero;
+                }
+            }
+        }
+
+        internal static class Native
+        {
+            public const int GWL_EXSTYLE = -20;
+            public const int WS_EX_TRANSPARENT = 0x00000020;
+            public const int WS_EX_TOOLWINDOW = 0x00000080;
+            public const int WS_EX_NOACTIVATE = 0x08000000;
+            public const uint SRCCOPY = 0x00CC0020;
+            public const uint BI_RGB = 0;
+            public const uint DIB_RGB_COLORS = 0;
+            public const int SM_XVIRTUALSCREEN = 76;
+            public const int SM_YVIRTUALSCREEN = 77;
+            public const int SM_CXVIRTUALSCREEN = 78;
+            public const int SM_CYVIRTUALSCREEN = 79;
+
+            // Windows 11 window attributes (dwmapi.h)
+            public const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+            public const int DWMWA_BORDER_COLOR = 34;
+            public const int DWMWA_SYSTEMBACKDROP_TYPE = 38;
+            public const int DWMWA_MICA_EFFECT = 1029; // Windows 11 21H2, before DWMWA_SYSTEMBACKDROP_TYPE
+            public const int DWMWCP_DONOTROUND = 1;
+            public const int DWMSBT_NONE = 1;
+            public const uint DWMWA_COLOR_NONE = 0xFFFFFFFE;
+
+            [StructLayout(LayoutKind.Sequential)]
+            public struct RECT
+            {
+                public int Left;
+                public int Top;
+                public int Right;
+                public int Bottom;
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            public struct BITMAPINFOHEADER
+            {
+                public uint biSize;
+                public int biWidth;
+                public int biHeight;
+                public ushort biPlanes;
+                public ushort biBitCount;
+                public uint biCompression;
+                public uint biSizeImage;
+                public int biXPelsPerMeter;
+                public int biYPelsPerMeter;
+                public uint biClrUsed;
+                public uint biClrImportant;
+            }
+
+            [DllImport("user32.dll")]
+            public static extern IntPtr GetDC(IntPtr hWnd);
+
+            [DllImport("user32.dll")]
+            public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool IsWindowVisible(IntPtr hWnd);
+
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool IsIconic(IntPtr hWnd);
+
+            [DllImport("user32.dll")]
+            public static extern int GetSystemMetrics(int nIndex);
+
+            [DllImport("user32.dll")]
+            public static extern uint GetDpiForWindow(IntPtr hwnd);
+
+            [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+            public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+
+            [DllImport("user32.dll", EntryPoint = "SetWindowLongW")]
+            public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+            [DllImport("gdi32.dll")]
+            public static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+
+            [DllImport("gdi32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool DeleteDC(IntPtr hdc);
+
+            [DllImport("gdi32.dll")]
+            public static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER pbmi, uint usage, out IntPtr ppvBits, IntPtr hSection, uint offset);
+
+            [DllImport("gdi32.dll")]
+            public static extern IntPtr SelectObject(IntPtr hdc, IntPtr h);
+
+            [DllImport("gdi32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool DeleteObject(IntPtr ho);
+
+            [DllImport("gdi32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool BitBlt(IntPtr hdc, int x, int y, int cx, int cy, IntPtr hdcSrc, int x1, int y1, uint rop);
+
+            [DllImport("gdi32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool GdiFlush();
+
+            [DllImport("dwmapi.dll")]
+            public static extern int DwmFlush();
+
+            [DllImport("dwmapi.dll")]
+            public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+        }
+    }
+
+    /// <summary>
+    /// The glass of one window: what is behind the window, read from the screen, blurred and painted as the window's
+    /// background several times a second, with the theme's tint drawn over it by the window itself. The window must
+    /// be layered (AllowsTransparency) so it is never read back into its own glass.
+    /// The surface sets the window's tint opacity through the callback it was given: AeroGlassHelper.TintOpacity
+    /// while the glass is live, 1 otherwise.
+    /// </summary>
+    internal sealed class AeroGlassSurface : IDisposable
+    {
+        // How often the screen behind the window is read
+        private const int FrameIntervalMilliseconds = 50;
+
+        // Radius of each of the three box blurs, in device-independent pixels: together a Gaussian of about 3.5 px,
+        // the softness of Vista's and Windows 7's glass
+        private const double BlurRadius = 3;
+        private const int BlurPasses = 3;
+
+        private static readonly Brush OpaqueBacking = CreateOpaqueBacking();
+
+        private readonly Window _window;
+        private readonly Action<double> _setTintOpacity;
+        private readonly ImageBrush _glassBrush;
+
+        private enum Mode
+        {
+            Off,
+            Opaque,
+            Live
+        }
+
+        private Mode _mode = Mode.Off;
+        private int _generation;
+        private bool _backgroundSaved;
+        private object _savedBackground;
+        private CancellationTokenSource _loopCancellation;
+        private bool _disposed;
+
+        public AeroGlassSurface(Window window, Action<double> setTintOpacity)
+        {
+            _window = window ?? throw new ArgumentNullException(nameof(window));
+            _setTintOpacity = setTintOpacity ?? throw new ArgumentNullException(nameof(setTintOpacity));
+            _glassBrush = new ImageBrush
+            {
+                Stretch = Stretch.Fill,
+                AlignmentX = AlignmentX.Left,
+                AlignmentY = AlignmentY.Top
+            };
+        }
+
+        /// <summary>
+        /// Shows live glass: what is behind the window, blurred. If this Windows cannot read the screen without the
+        /// glass windows themselves, the glass is drawn opaque instead. Call on the UI thread once the window has a
+        /// handle and again whenever the glass settings change.
+        /// </summary>
+        public void Start()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            IntPtr hwnd = new WindowInteropHelper(_window).Handle;
+
+            if (hwnd == IntPtr.Zero || !_window.AllowsTransparency)
+            {
+                Stop();
+                return;
+            }
+
+            if (_mode == Mode.Live)
+            {
+                // Already running; only the tint may have changed
+                _setTintOpacity(AeroGlassHelper.TintOpacity);
+                return;
+            }
+
+            StopLoop();
+            AeroGlassHelper.PrepareWindow(hwnd);
+            SaveBackground();
+            int generation = ++_generation;
+
+            Task<bool> check = AeroGlassHelper.CheckCaptureAsync();
+
+            if (check.IsCompleted)
+            {
+                BeginLive(hwnd, generation, check.Result);
+                return;
+            }
+
+            // Only while Retrostar starts: opaque until the capture check is done
+            _mode = Mode.Opaque;
+            _window.Background = OpaqueBacking;
+            _setTintOpacity(1.0);
+
+            Dispatcher dispatcher = _window.Dispatcher;
+            _ = check.ContinueWith(task =>
+            {
+                bool available = task.Status == TaskStatus.RanToCompletion && task.Result;
+                _ = dispatcher.BeginInvoke(new Action(() => BeginLive(hwnd, generation, available)));
+            }, TaskScheduler.Default);
+        }
+
+        /// <summary>
+        /// Shows the glass without anything behind it: the tint over an opaque backing, as the glass looks over black.
+        /// Used while "Allow blur behind" is off.
+        /// </summary>
+        public void StartOpaque()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            StopLoop();
+            _generation++;
+            SaveBackground();
+            _mode = Mode.Opaque;
+            _window.Background = OpaqueBacking;
+            _setTintOpacity(1.0);
+        }
+
+        /// <summary>Removes the glass and gives the window its own background back.</summary>
+        public void Stop()
+        {
+            StopLoop();
+            _generation++;
+            _mode = Mode.Off;
+            _glassBrush.ImageSource = null;
+            RestoreBackground();
+            _setTintOpacity(1.0);
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            Stop();
+            _disposed = true;
+        }
+
+        private void BeginLive(IntPtr hwnd, int generation, bool available)
+        {
+            if (_disposed || generation != _generation)
+            {
+                return;
+            }
+
+            if (!available)
+            {
+                _mode = Mode.Opaque;
+                _window.Background = OpaqueBacking;
+                _setTintOpacity(1.0);
+                return;
+            }
+
+            // The first frame is drawn at once, so the window never shows unblurred
+            using (AeroGlassHelper.ScreenReader reader = new AeroGlassHelper.ScreenReader())
+            {
+                ulong ignored = 0;
+                BitmapSource first = RenderFrame(hwnd, reader, ref ignored, true);
+
+                if (first != null)
+                {
+                    _glassBrush.ImageSource = first;
+                }
+            }
+
+            _mode = Mode.Live;
+            _window.Background = _glassBrush;
+            _setTintOpacity(AeroGlassHelper.TintOpacity);
+
+            CancellationTokenSource cancellation = new CancellationTokenSource();
+            _loopCancellation = cancellation;
+            Dispatcher dispatcher = _window.Dispatcher;
+
+            _ = Task.Run(() => RunLoop(hwnd, generation, dispatcher, cancellation.Token));
+        }
+
+        private async Task RunLoop(IntPtr hwnd, int generation, Dispatcher dispatcher, CancellationToken token)
+        {
+            using AeroGlassHelper.ScreenReader reader = new AeroGlassHelper.ScreenReader();
+            ulong lastSignature = 0;
+
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    BitmapSource frame = RenderFrame(hwnd, reader, ref lastSignature, false);
+
+                    if (frame != null)
+                    {
+                        _ = dispatcher.BeginInvoke(DispatcherPriority.Render, new Action(() =>
+                        {
+                            if (generation == _generation && _mode == Mode.Live)
+                            {
+                                _glassBrush.ImageSource = frame;
+                            }
+                        }));
+                    }
+                }
+                catch (Exception e)
+                {
+                    ShellLogger.Debug($"AeroGlassSurface: Unable to draw glass: {e.Message}");
+                }
+
+                try
+                {
+                    await Task.Delay(FrameIntervalMilliseconds, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Reads the screen behind the window with a margin for the blur, blurs it and crops it to the window.
+        /// Returns null when nothing changed since the last frame (unless forced) or the window cannot be read.
+        /// </summary>
+        private static BitmapSource RenderFrame(IntPtr hwnd, AeroGlassHelper.ScreenReader reader, ref ulong lastSignature, bool force)
+        {
+            if (!AeroGlassHelper.Native.IsWindowVisible(hwnd) || AeroGlassHelper.Native.IsIconic(hwnd) ||
+                !AeroGlassHelper.Native.GetWindowRect(hwnd, out AeroGlassHelper.Native.RECT window))
+            {
+                return null;
+            }
+
+            int width = window.Right - window.Left;
+            int height = window.Bottom - window.Top;
+
+            if (width <= 0 || height <= 0)
+            {
+                return null;
+            }
+
+            int radius = Math.Max(1, (int)Math.Round(BlurRadius * GetScale(hwnd)));
+            int margin = radius * BlurPasses;
+
+            // The area read: the window plus the blur's reach, kept on the screen
+            int screenLeft = AeroGlassHelper.Native.GetSystemMetrics(AeroGlassHelper.Native.SM_XVIRTUALSCREEN);
+            int screenTop = AeroGlassHelper.Native.GetSystemMetrics(AeroGlassHelper.Native.SM_YVIRTUALSCREEN);
+            int screenRight = screenLeft + AeroGlassHelper.Native.GetSystemMetrics(AeroGlassHelper.Native.SM_CXVIRTUALSCREEN);
+            int screenBottom = screenTop + AeroGlassHelper.Native.GetSystemMetrics(AeroGlassHelper.Native.SM_CYVIRTUALSCREEN);
+
+            int left = Math.Max(window.Left - margin, screenLeft);
+            int top = Math.Max(window.Top - margin, screenTop);
+            int right = Math.Min(window.Right + margin, screenRight);
+            int bottom = Math.Min(window.Bottom + margin, screenBottom);
+
+            if (right <= left || bottom <= top)
+            {
+                return null;
+            }
+
+            int readWidth = right - left;
+            int readHeight = bottom - top;
+            byte[] pixels = reader.Read(left, top, readWidth, readHeight);
+
+            if (pixels == null)
+            {
+                return null;
+            }
+
+            ulong signature = Signature(pixels, window, readWidth, readHeight, radius);
+
+            if (!force && signature == lastSignature)
+            {
+                return null;
+            }
+
+            lastSignature = signature;
+
+            BoxBlur(pixels, readWidth, readHeight, radius, BlurPasses);
+
+            // Crop to the window; parts of the window off the screen take the nearest edge of what was read
+            byte[] output = new byte[width * height * 4];
+            int stride = width * 4;
+
+            for (int y = 0; y < height; y++)
+            {
+                int sourceY = Math.Clamp(window.Top + y - top, 0, readHeight - 1);
+                int sourceRow = sourceY * readWidth * 4;
+                int outputRow = y * stride;
+
+                for (int x = 0; x < width; x++)
+                {
+                    int sourceX = Math.Clamp(window.Left + x - left, 0, readWidth - 1);
+                    int source = sourceRow + sourceX * 4;
+                    int target = outputRow + x * 4;
+                    output[target] = pixels[source];
+                    output[target + 1] = pixels[source + 1];
+                    output[target + 2] = pixels[source + 2];
+                    output[target + 3] = 0xFF;
+                }
+            }
+
+            BitmapSource bitmap = BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgr32, null, output, stride);
+            bitmap.Freeze();
+            return bitmap;
+        }
+
+        private static double GetScale(IntPtr hwnd)
+        {
+            try
+            {
+                uint dpi = AeroGlassHelper.Native.GetDpiForWindow(hwnd);
+                return dpi > 0 ? dpi / 96.0 : 1.0;
+            }
+            catch (Exception)
+            {
+                // Windows before 10 (1607) has no per-window DPI
+                return 1.0;
+            }
+        }
+
+        /// <summary>A fingerprint of the pixels read and where the window is, to skip frames where nothing changed.</summary>
+        private static ulong Signature(byte[] pixels, AeroGlassHelper.Native.RECT window, int width, int height, int radius)
+        {
+            ulong hash = 14695981039346656037UL;
+
+            for (int i = 0; i + 3 < pixels.Length; i += 4)
+            {
+                hash ^= BitConverter.ToUInt32(pixels, i);
+                hash *= 1099511628211UL;
+            }
+
+            hash ^= (ulong)(uint)window.Left | ((ulong)(uint)window.Top << 32);
+            hash *= 1099511628211UL;
+            hash ^= (ulong)(uint)width | ((ulong)(uint)height << 32);
+            hash *= 1099511628211UL;
+            hash ^= (ulong)(uint)radius;
+            return hash;
+        }
+
+        /// <summary>
+        /// Blurs 32-bit BGRA pixels in place with repeated box blurs, horizontally then vertically, clamping at the
+        /// edges. Three passes make a close approximation of a Gaussian blur.
+        /// </summary>
+        private static void BoxBlur(byte[] pixels, int width, int height, int radius, int passes)
+        {
+            byte[] scratch = new byte[pixels.Length];
+
+            for (int pass = 0; pass < passes; pass++)
+            {
+                BlurLines(pixels, scratch, width, height, radius, 4, width * 4);
+                BlurLines(scratch, pixels, height, width, radius, width * 4, 4);
+            }
+        }
+
+        /// <summary>
+        /// One box blur along lines of pixels: each of the lineCount lines has length pixels, step bytes apart, and
+        /// lines start lineStep bytes apart.
+        /// </summary>
+        private static void BlurLines(byte[] source, byte[] target, int length, int lineCount, int radius, int step, int lineStep)
+        {
+            int window = radius * 2 + 1;
+            int last = length - 1;
+
+            for (int line = 0; line < lineCount; line++)
+            {
+                int start = line * lineStep;
+
+                for (int channel = 0; channel < 3; channel++)
+                {
+                    int origin = start + channel;
+                    int sum = source[origin] * (radius + 1);
+
+                    for (int i = 1; i <= radius; i++)
+                    {
+                        sum += source[origin + Math.Min(i, last) * step];
+                    }
+
+                    for (int i = 0; i < length; i++)
+                    {
+                        target[origin + i * step] = (byte)(sum / window);
+
+                        int add = Math.Min(i + radius + 1, last);
+                        int remove = Math.Max(i - radius, 0);
+                        sum += source[origin + add * step] - source[origin + remove * step];
+                    }
+                }
+
+                for (int i = 0; i < length; i++)
+                {
+                    target[start + i * step + 3] = 0xFF;
+                }
+            }
+        }
+
+        private void StopLoop()
+        {
+            if (_loopCancellation != null)
+            {
+                _loopCancellation.Cancel();
+                _loopCancellation.Dispose();
+                _loopCancellation = null;
+            }
+        }
+
+        private void SaveBackground()
+        {
+            if (_backgroundSaved)
+            {
+                return;
+            }
+
+            _savedBackground = _window.ReadLocalValue(Window.BackgroundProperty);
+            _backgroundSaved = true;
+        }
+
+        private void RestoreBackground()
+        {
+            if (!_backgroundSaved)
+            {
+                return;
+            }
+
+            if (_savedBackground == DependencyProperty.UnsetValue)
+            {
+                _window.ClearValue(Window.BackgroundProperty);
+            }
+            else
+            {
+                _window.SetValue(Window.BackgroundProperty, _savedBackground);
+            }
+
+            _savedBackground = null;
+            _backgroundSaved = false;
+        }
+
+        private static Brush CreateOpaqueBacking()
+        {
+            SolidColorBrush brush = new SolidColorBrush(Colors.Black);
+            brush.Freeze();
+            return brush;
         }
     }
 }
