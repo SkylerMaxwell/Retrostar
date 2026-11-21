@@ -6,7 +6,13 @@
         menus and tray details Windows 7 kept; everything Windows 7 changed is redefined here.
         Geometry is measured from Windows 7 at 100% scale: a 40 px bar, 62 px button slots (a 60 px button and a 2 px gap),
         the Windows Vista Start orb (until the Windows 7 orb image is supplied), a two-line clock and a 15 px Show Desktop strip at the far end.
-        While "Enable Aero glass" is off, every part switches to the opaque Windows 7 Basic look (the *Basic keys).
+        Measured from Windows 7 screenshots: the glass is one flat tint with a dark and a light line along its top edge that
+        the buttons do not cover (the buttons start 2 px below the bar's top), and the lines are not faded by the glass
+        transparency setting. Windows 7 has no Quick Launch (pinned programs are superbar buttons), so for the exact
+        Windows 7 look leave "Show Quick Launch" off.
+        While "Enable Aero glass" is off, every part switches to the opaque Windows 7 Basic look (the *Basic keys): a flat
+        light blue bar, a darker notification area panel with a stepped fade on its left, white clock text, and a dark
+        slate Show Desktop strip.
     -->
     <ResourceDictionary.MergedDictionaries>
         <ResourceDictionary Source="Windows Vista Aero.xaml" />
@@ -20,30 +26,34 @@
     <system:Boolean x:Key="UseLargeIcons">True</system:Boolean>
     <system:Boolean x:Key="UseSuperbar">True</system:Boolean>
 
-    <!-- Taskbar: glass tinted with the Sky colour; a dark line and a light line along the top edge -->
-    <LinearGradientBrush x:Key="TaskbarBackground" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#802A5683" Offset="0.0" />
-        <GradientStop Color="#801C4A7A" Offset="0.5" />
-        <GradientStop Color="#8C143D66" Offset="1.0" />
-    </LinearGradientBrush>
-    <LinearGradientBrush x:Key="TaskbarVerticalBackground" StartPoint="0,0" EndPoint="1,0">
-        <GradientStop Color="#802A5683" Offset="0.0" />
-        <GradientStop Color="#801C4A7A" Offset="0.5" />
-        <GradientStop Color="#8C143D66" Offset="1.0" />
-    </LinearGradientBrush>
+    <!--
+        Taskbar glass, measured from Windows 7 at 100%: a flat Sky tint (about #4975A0 at 55% over the desktop) with no
+        gradient, under a dark line (about 55% black) and a light line (about 45%) along the top edge. The tint is
+        written at 92% so that, with the glass strength of 0.6 (AeroGlassHelper.GlassStrength), the default
+        transparency setting gives the measured 55%. The two lines are part of the frame, not of the tint, so they stay
+        the same whatever the transparency setting.
+    -->
+    <SolidColorBrush x:Key="TaskbarBackground" Color="#EB4975A0" />
+    <SolidColorBrush x:Key="TaskbarVerticalBackground" Color="#EB4975A0" />
     <SolidColorBrush x:Key="TaskbarTopBorder" Color="#8C000000" />
-    <SolidColorBrush x:Key="TaskbarTopInnerBorder" Color="#7FE0E6EE" />
+    <SolidColorBrush x:Key="TaskbarTopInnerBorder" Color="#73E0E6EE" />
 
     <!-- Windows 7 Basic taskbar, measured: dark line, light line, flat light blue -->
-    <SolidColorBrush x:Key="TaskbarBackgroundBasic" Color="#A7C0DC" />
-    <SolidColorBrush x:Key="TaskbarTopBorderBasic" Color="#434D58" />
-    <SolidColorBrush x:Key="TaskbarTopInnerBorderBasic" Color="#CAD9EA" />
+    <SolidColorBrush x:Key="TaskbarBackgroundBasic" Color="#A6BFDB" />
+    <SolidColorBrush x:Key="TaskbarTopBorderBasic" Color="#434B55" />
+    <SolidColorBrush x:Key="TaskbarTopInnerBorderBasic" Color="#CBD9E7" />
+    <!-- Windows 7 Basic notification area: a darker panel, reached by a stepped fade 32 px wide on its left -->
+    <SolidColorBrush x:Key="TrayPanelBasic" Color="#8093A9" />
+    <SolidColorBrush x:Key="TrayFade1Basic" Color="#9EB6CF" />
+    <SolidColorBrush x:Key="TrayFade2Basic" Color="#93A9C2" />
+    <SolidColorBrush x:Key="TrayFade3Basic" Color="#8BA1B7" />
+    <SolidColorBrush x:Key="TrayFade4Basic" Color="#8199B3" />
 
     <SolidColorBrush x:Key="ClockForeground" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="ClockForegroundBasic" Color="#000000" />
+    <SolidColorBrush x:Key="ClockForegroundBasic" Color="#FFFFFF" />
     <SolidColorBrush x:Key="InputLanguageForegroundBasic" Color="#000000" />
     <SolidColorBrush x:Key="TrayToggleArrowForeground" Color="#FFFFFF" />
-    <SolidColorBrush x:Key="TrayToggleArrowForegroundBasic" Color="#1E2833" />
+    <SolidColorBrush x:Key="TrayToggleArrowForegroundBasic" Color="#FFFFFF" />
 
     <ToolTip x:Key="StartButtonTip" Content="{DynamicResource start_button_tip_vista}" />
 
@@ -54,17 +64,18 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ContentControl">
                     <Grid>
-                        <!-- Glass tint layer, faded by the Aero glass transparency setting; the content is drawn over it -->
+                        <!-- Glass tint: one flat colour, faded by the Aero glass transparency setting -->
+                        <Border Background="{DynamicResource TaskbarBackground}"
+                                Opacity="{Binding Path=GlassTintOpacity, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
+                                x:Name="GlassTint" />
+                        <!-- The two lines along the top edge: part of the frame, never faded; the buttons start below them -->
                         <Border BorderThickness="0,1,0,0"
                                 BorderBrush="{DynamicResource TaskbarTopBorder}"
-                                Opacity="{Binding Path=GlassTintOpacity, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
                                 x:Name="TaskbarTopBorder">
                             <Border BorderThickness="0,1,0,0"
                                     BorderBrush="{DynamicResource TaskbarTopInnerBorder}"
-                                    Background="{DynamicResource TaskbarBackground}"
                                     x:Name="TaskbarTopInnerBorder" />
                         </Border>
-                        <!-- Buttons cover the two top lines, as in Windows 7 -->
                         <ContentPresenter Name="Content" />
                     </Grid>
                     <ControlTemplate.Triggers>
@@ -77,7 +88,7 @@
                                 <Setter TargetName="TaskbarTopInnerBorder"
                                         Property="BorderThickness"
                                         Value="1,0,0,0" />
-                                <Setter TargetName="TaskbarTopInnerBorder"
+                                <Setter TargetName="GlassTint"
                                         Property="Background"
                                         Value="{DynamicResource TaskbarVerticalBackground}" />
                             </DataTrigger.Setters>
@@ -92,7 +103,7 @@
                                 <Setter TargetName="TaskbarTopInnerBorder"
                                         Property="BorderBrush"
                                         Value="{DynamicResource TaskbarTopInnerBorderBasic}" />
-                                <Setter TargetName="TaskbarTopInnerBorder"
+                                <Setter TargetName="GlassTint"
                                         Property="Background"
                                         Value="{DynamicResource TaskbarBackgroundBasic}" />
                             </DataTrigger.Setters>
@@ -228,85 +239,89 @@
                     <Grid Background="Transparent"
                           Margin="0,0,2,0"
                           x:Name="Slot">
-                        <!--
-                            Stacked windows: copies of the button, as wide as Main and in its current brushes, set
-                            behind it to the right. Each is clipped to the strip it exposes, so the glass of the copies
-                            never adds up under the button. Stack2 is the rearmost.
-                        -->
-                        <Grid x:Name="Stack2"
-                              Visibility="Collapsed"
-                              HorizontalAlignment="Right"
-                              Width="4"
-                              ClipToBounds="True">
-                            <Border HorizontalAlignment="Right"
-                                    Width="{Binding ActualWidth, ElementName=Main}"
-                                    CornerRadius="3"
-                                    BorderThickness="1"
-                                    BorderBrush="{Binding BorderBrush, ElementName=Outer}">
-                                <Border CornerRadius="2"
+                        <!-- Windows 7 buttons start below the bar's two top lines (2 px) and run to the bottom edge -->
+                        <Grid x:Name="Frame"
+                              Margin="0,2,0,0">
+                            <!--
+                                Stacked windows: copies of the button, as wide as Main and in its current brushes, set
+                                behind it to the right. Each is clipped to the strip it exposes, so the glass of the copies
+                                never adds up under the button. Stack2 is the rearmost.
+                            -->
+                            <Grid x:Name="Stack2"
+                                  Visibility="Collapsed"
+                                  HorizontalAlignment="Right"
+                                  Width="4"
+                                  ClipToBounds="True">
+                                <Border HorizontalAlignment="Right"
+                                        Width="{Binding ActualWidth, ElementName=Main}"
+                                        CornerRadius="3"
                                         BorderThickness="1"
-                                        BorderBrush="{Binding BorderBrush, ElementName=Inner}"
-                                        Background="{Binding Background, ElementName=Inner}" />
-                            </Border>
-                        </Grid>
-                        <Grid x:Name="Stack1"
-                              Visibility="Collapsed"
-                              HorizontalAlignment="Right"
-                              Width="5"
-                              ClipToBounds="True">
-                            <Border HorizontalAlignment="Right"
-                                    Width="{Binding ActualWidth, ElementName=Main}"
-                                    CornerRadius="3"
-                                    BorderThickness="1"
-                                    BorderBrush="{Binding BorderBrush, ElementName=Outer}">
-                                <Border CornerRadius="2"
-                                        BorderThickness="1"
-                                        BorderBrush="{Binding BorderBrush, ElementName=Inner}"
-                                        Background="{Binding Background, ElementName=Inner}" />
-                            </Border>
-                        </Grid>
-                        <Grid x:Name="Main">
-                            <Border x:Name="Outer"
-                                    CornerRadius="3"
-                                    BorderThickness="1"
-                                    BorderBrush="Transparent">
-                                <Border x:Name="Inner"
-                                        CornerRadius="2"
-                                        BorderThickness="1"
-                                        BorderBrush="Transparent"
-                                        Background="Transparent"
-                                        ClipToBounds="True">
-                                    <Grid>
-                                        <!-- Progress shown by the program, drawn across the button -->
-                                        <Rectangle x:Name="Progress"
-                                                   Visibility="Collapsed"
-                                                   Fill="{DynamicResource SuperbarProgressNormal}"
-                                                   RenderTransformOrigin="0,0.5">
-                                            <Rectangle.RenderTransform>
-                                                <ScaleTransform ScaleX="{Binding Path=ProgressFraction, Mode=OneWay}" />
-                                            </Rectangle.RenderTransform>
-                                        </Rectangle>
-                                        <!-- Hover glow in the icon's colour, following the mouse -->
-                                        <Border x:Name="Glow"
-                                                Opacity="0">
-                                            <Border.Background>
-                                                <SolidColorBrush Color="{Binding Path=HotTrackColor, Mode=OneWay}" />
-                                            </Border.Background>
-                                            <Border.OpacityMask>
-                                                <RadialGradientBrush Center="{Binding Path=HotTrackCenter, Mode=OneWay}"
-                                                                     GradientOrigin="{Binding Path=HotTrackCenter, Mode=OneWay}"
-                                                                     RadiusX="0.75"
-                                                                     RadiusY="0.95">
-                                                    <GradientStop Color="#FFFFFFFF" Offset="0.0" />
-                                                    <GradientStop Color="#00FFFFFF" Offset="1.0" />
-                                                </RadialGradientBrush>
-                                            </Border.OpacityMask>
-                                        </Border>
-                                    </Grid>
+                                        BorderBrush="{Binding BorderBrush, ElementName=Outer}">
+                                    <Border CornerRadius="2"
+                                            BorderThickness="1"
+                                            BorderBrush="{Binding BorderBrush, ElementName=Inner}"
+                                            Background="{Binding Background, ElementName=Inner}" />
                                 </Border>
-                            </Border>
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center" />
+                            </Grid>
+                            <Grid x:Name="Stack1"
+                                  Visibility="Collapsed"
+                                  HorizontalAlignment="Right"
+                                  Width="5"
+                                  ClipToBounds="True">
+                                <Border HorizontalAlignment="Right"
+                                        Width="{Binding ActualWidth, ElementName=Main}"
+                                        CornerRadius="3"
+                                        BorderThickness="1"
+                                        BorderBrush="{Binding BorderBrush, ElementName=Outer}">
+                                    <Border CornerRadius="2"
+                                            BorderThickness="1"
+                                            BorderBrush="{Binding BorderBrush, ElementName=Inner}"
+                                            Background="{Binding Background, ElementName=Inner}" />
+                                </Border>
+                            </Grid>
+                            <Grid x:Name="Main">
+                                <Border x:Name="Outer"
+                                        CornerRadius="3"
+                                        BorderThickness="1"
+                                        BorderBrush="Transparent">
+                                    <Border x:Name="Inner"
+                                            CornerRadius="2"
+                                            BorderThickness="1"
+                                            BorderBrush="Transparent"
+                                            Background="Transparent"
+                                            ClipToBounds="True">
+                                        <Grid>
+                                            <!-- Progress shown by the program, drawn across the button -->
+                                            <Rectangle x:Name="Progress"
+                                                       Visibility="Collapsed"
+                                                       Fill="{DynamicResource SuperbarProgressNormal}"
+                                                       RenderTransformOrigin="0,0.5">
+                                                <Rectangle.RenderTransform>
+                                                    <ScaleTransform ScaleX="{Binding Path=ProgressFraction, Mode=OneWay}" />
+                                                </Rectangle.RenderTransform>
+                                            </Rectangle>
+                                            <!-- Hover glow in the icon's colour, following the mouse -->
+                                            <Border x:Name="Glow"
+                                                    Opacity="0">
+                                                <Border.Background>
+                                                    <SolidColorBrush Color="{Binding Path=HotTrackColor, Mode=OneWay}" />
+                                                </Border.Background>
+                                                <Border.OpacityMask>
+                                                    <RadialGradientBrush Center="{Binding Path=HotTrackCenter, Mode=OneWay}"
+                                                                         GradientOrigin="{Binding Path=HotTrackCenter, Mode=OneWay}"
+                                                                         RadiusX="0.75"
+                                                                         RadiusY="0.95">
+                                                        <GradientStop Color="#FFFFFFFF" Offset="0.0" />
+                                                        <GradientStop Color="#00FFFFFF" Offset="1.0" />
+                                                    </RadialGradientBrush>
+                                                </Border.OpacityMask>
+                                            </Border>
+                                        </Grid>
+                                    </Border>
+                                </Border>
+                                <ContentPresenter HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center" />
+                            </Grid>
                         </Grid>
                     </Grid>
                     <ControlTemplate.Triggers>
@@ -420,6 +435,9 @@
                             <Setter TargetName="Slot"
                                     Property="Margin"
                                     Value="0,0,0,2" />
+                            <Setter TargetName="Frame"
+                                    Property="Margin"
+                                    Value="2,0,0,0" />
                         </DataTrigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
@@ -520,6 +538,14 @@
                 Value="Center" />
         <Setter Property="HorizontalAlignment"
                 Value="Center" />
+        <Setter Property="Effect">
+            <Setter.Value>
+                <DropShadowEffect ShadowDepth="0"
+                                  BlurRadius="6"
+                                  Color="#000000"
+                                  Opacity="0.55" />
+            </Setter.Value>
+        </Setter>
         <Style.Triggers>
             <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
                          Value="Vertical">
@@ -532,6 +558,8 @@
                          Value="False">
                 <Setter Property="Foreground"
                         Value="{DynamicResource ClockForegroundBasic}" />
+                <Setter Property="Effect"
+                        Value="{x:Null}" />
             </DataTrigger>
         </Style.Triggers>
     </Style>
@@ -676,6 +704,70 @@
         </Style.Triggers>
     </Style>
 
+    <!--
+        Notification area. On glass it has no background of its own. In the Windows 7 Basic look it is a darker panel that
+        starts 2 px below the top lines and is reached by a stepped fade 32 px wide on its left (measured: 10, 9, 8 and
+        5 px steps), drawn to the left of the panel's own bounds so that no icon moves.
+    -->
+    <Style TargetType="GroupBox"
+           x:Key="Tray">
+        <Setter Property="OverridesDefaultStyle"
+                Value="True" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="GroupBox">
+                    <Grid>
+                        <Grid x:Name="BasicPanel"
+                              Visibility="Collapsed"
+                              Margin="0,2,0,0">
+                            <Border Background="{DynamicResource TrayPanelBasic}" />
+                            <StackPanel x:Name="BasicFade"
+                                        Orientation="Horizontal"
+                                        HorizontalAlignment="Left"
+                                        Margin="-32,0,0,0">
+                                <Rectangle Width="10" Fill="{DynamicResource TrayFade1Basic}" />
+                                <Rectangle Width="9" Fill="{DynamicResource TrayFade2Basic}" />
+                                <Rectangle Width="8" Fill="{DynamicResource TrayFade3Basic}" />
+                                <Rectangle Width="5" Fill="{DynamicResource TrayFade4Basic}" />
+                            </StackPanel>
+                        </Grid>
+                        <Border BorderThickness="0"
+                                Padding="7,0,0,0"
+                                Name="TrayBorder">
+                            <ContentPresenter Margin="0,0,4,0"
+                                              Name="Content" />
+                        </Border>
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding Path=Orientation, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
+                                     Value="Vertical">
+                            <DataTrigger.Setters>
+                                <Setter TargetName="TrayBorder"
+                                        Property="Padding"
+                                        Value="2,7,2,0" />
+                                <Setter TargetName="Content"
+                                        Property="Margin"
+                                        Value="0,0,0,6" />
+                                <Setter TargetName="BasicPanel"
+                                        Property="Margin"
+                                        Value="2,0,0,0" />
+                                <Setter TargetName="BasicFade"
+                                        Property="Visibility"
+                                        Value="Collapsed" />
+                            </DataTrigger.Setters>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding Path=IsAeroGlassEnabled, RelativeSource={RelativeSource Mode=FindAncestor, AncestorType={x:Type Window}}}"
+                                     Value="False">
+                            <Setter TargetName="BasicPanel"
+                                    Property="Visibility"
+                                    Value="Visible" />
+                        </DataTrigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- The superbar fills the space up to the notification area -->
     <Style x:Key="TaskListScrollViewer"
            TargetType="ScrollViewer"
@@ -703,15 +795,31 @@
         <GradientStop Color="#66FFFFFF" Offset="0.0" />
         <GradientStop Color="#00FFFFFF" Offset="1.0" />
     </LinearGradientBrush>
-    <SolidColorBrush x:Key="ShowDesktopOuterBorderBasic" Color="#FF6A7B8F" />
-    <SolidColorBrush x:Key="ShowDesktopInnerBorderBasic" Color="#FFE6EEF7" />
+    <SolidColorBrush x:Key="ShowDesktopOuterBorderBasic" Color="#505962" />
+    <SolidColorBrush x:Key="ShowDesktopInnerBorderBasic" Color="#8893A2" />
     <LinearGradientBrush x:Key="ShowDesktopBackgroundBasic" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#FFD3E0EF" Offset="0.0" />
-        <GradientStop Color="#FFB2C9E2" Offset="1.0" />
+        <GradientStop Color="#737C8F" Offset="0.0" />
+        <GradientStop Color="#737C8F" Offset="0.10" />
+        <GradientStop Color="#5A6779" Offset="0.11" />
+        <GradientStop Color="#5A6779" Offset="0.72" />
+        <GradientStop Color="#5D7986" Offset="0.73" />
+        <GradientStop Color="#5D7986" Offset="0.80" />
+        <GradientStop Color="#737C8F" Offset="0.81" />
+        <GradientStop Color="#737C8F" Offset="0.93" />
+        <GradientStop Color="#8093A9" Offset="0.94" />
+        <GradientStop Color="#8093A9" Offset="1.0" />
     </LinearGradientBrush>
     <LinearGradientBrush x:Key="ShowDesktopBackgroundHoverBasic" StartPoint="0,0" EndPoint="0,1">
-        <GradientStop Color="#FFF2F7FC" Offset="0.0" />
-        <GradientStop Color="#FFCFDFF1" Offset="1.0" />
+        <GradientStop Color="#8A93A6" Offset="0.0" />
+        <GradientStop Color="#8A93A6" Offset="0.10" />
+        <GradientStop Color="#71809A" Offset="0.11" />
+        <GradientStop Color="#71809A" Offset="0.72" />
+        <GradientStop Color="#74919F" Offset="0.73" />
+        <GradientStop Color="#74919F" Offset="0.80" />
+        <GradientStop Color="#8A93A6" Offset="0.81" />
+        <GradientStop Color="#8A93A6" Offset="0.93" />
+        <GradientStop Color="#97A9BF" Offset="0.94" />
+        <GradientStop Color="#97A9BF" Offset="1.0" />
     </LinearGradientBrush>
 
     <Style TargetType="ToggleButton"
