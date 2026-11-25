@@ -41,7 +41,6 @@ namespace RetroBar
         private readonly Updater _updater;
         private readonly HotkeyManager _hotkeyManager;
         private readonly VistaSoundScheme _vistaSounds = new VistaSoundScheme();
-        private readonly VistaIconScheme _vistaIcons = new VistaIconScheme();
 
         public App()
         {
@@ -119,16 +118,19 @@ namespace RetroBar
             }
         }
 
-        /// <summary>Vista's icons show while Retrostar runs and the setting is on; otherwise Windows' own are in place.</summary>
+        /// <summary>
+        /// Vista's icons are in place while the setting is on, and stay when Retrostar closes; turning it off puts
+        /// Windows' own back (the uninstaller does the same).
+        /// </summary>
         private void UpdateVistaIcons()
         {
             if (Settings.Instance.UseVistaIcons)
             {
-                _vistaIcons.Apply();
+                VistaIconScheme.Apply();
             }
             else
             {
-                _vistaIcons.Restore();
+                VistaIconScheme.Remove(false);
             }
         }
 
@@ -193,9 +195,9 @@ namespace RetroBar
         {
             Settings.Instance.PropertyChanged -= Settings_PropertyChanged;
 
-            // First, so that the Windows sounds and icons return even if something below fails
+            // First, so that the Windows sounds return even if something below fails. The Vista icons stay: they are
+            // removed by turning their setting off or by uninstalling
             _vistaSounds.Dispose();
-            _vistaIcons.Dispose();
 
             _explorerMonitor.Dispose();
             _startMenuManager?.Dispose();

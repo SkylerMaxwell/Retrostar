@@ -161,6 +161,15 @@ Source: "{#ReleasePath10}\publish-x64\Languages\*"; DestDir: "{app}\Languages"; 
 Source: "{#ReleasePath10}\publish-x64\Themes\*"; DestDir: "{app}\Themes"; Flags: ignoreversion recursesubdirs
 Source: "{#ReleasePath10}\publish-x64\Resources\*"; DestDir: "{app}\Resources"; Flags: ignoreversion recursesubdirs
 
+[InstallDelete]
+; Windows 7 Basic is no longer a separate theme (Windows 7 Aero shows that look while Aero glass is off)
+Type: files; Name: "{app}\Themes\Windows 7 Basic.xaml"
+
+[UninstallRun]
+; Before any file is removed: everything Retrostar changed in Windows goes back exactly as it was (the Vista icons,
+; including the machine-wide stock icons after one administrator approval, and any Vista sounds left in place)
+Filename: "{app}\{#RetroBarExeName}"; Parameters: "--restore-windows"; Flags: waituntilterminated; RunOnceId: "RestoreWindows"
+
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\RetroBar\Logs"
 Type: dirifempty; Name: "{localappdata}\RetroBar"
