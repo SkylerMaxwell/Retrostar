@@ -6051,7 +6051,7 @@ namespace RetroBar.Superbar
         /// Desktop programs without an ID of their own are listed in the Apps folder by a known-folder path,
         /// such as "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\notepad.exe". Returns that program's full path.
         /// </summary>
-        private static string ProgramPathFromAppId(string appId)
+        internal static string ProgramPathFromAppId(string appId)
         {
             if (string.IsNullOrEmpty(appId))
             {
@@ -6087,7 +6087,44 @@ namespace RetroBar.Superbar
             }
         }
 
-        internal static string GetShortcutTarget(string shortcutPath)
+        /// <summary>A shortcut's own icon location (environment variables expanded) and its target; false if it cannot be read.</summary>
+        internal static bool GetShortcutIcon(string shortcutPath, out string iconFile, out int iconIndex, out string target)
+        {
+            iconFile = null;
+            iconIndex = 0;
+            target = null;
+            object link = null;
+
+            try
+            {
+                link = new ShellLinkObject();
+                ((System.Runtime.InteropServices.ComTypes.IPersistFile)link).Load(shortcutPath, 0);
+
+                var icon = new StringBuilder(1024);
+                ((IShellLinkW)link).GetIconLocation(icon, icon.Capacity, out iconIndex);
+
+                var path = new StringBuilder(1024);
+                ((IShellLinkW)link).GetPath(path, path.Capacity, IntPtr.Zero, 0);
+
+                iconFile = string.IsNullOrWhiteSpace(icon.ToString()) ? null : Environment.ExpandEnvironmentVariables(icon.ToString().Trim().Trim('"'));
+                target = string.IsNullOrWhiteSpace(path.ToString()) ? null : Environment.ExpandEnvironmentVariables(path.ToString());
+                return true;
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Debug($"TaskbarPins: Unable to read shortcut {shortcutPath}: {e.Message}");
+                return false;
+            }
+            finally
+            {
+                if (link != null && Marshal.IsComObject(link))
+                {
+                    Marshal.FinalReleaseComObject(link);
+                }
+            }
+        }
+
+        private static string GetShortcutTarget(string shortcutPath)
         {
             object link = null;
 
@@ -7433,14 +7470,13 @@ namespace RetroBar.StartMenu
                     return null;
                 }
 
-                if (IsGenericIcon(info.iIcon) && File.Exists(path))
+                if (IsGenericIcon(info.iIcon))
                 {
-                    // Windows gave the blank document icon for a file that exists: its icon cache was caught
-                    // mid-refresh, or the shortcut's icon could not be read. Ask again, then go to the program itself.
-                    int better = ResolveGenericIcon(path);
-                    if (better >= 0)
+                    // Windows' icon cache gave its blank placeholder: read the icon straight from the program instead
+                    ImageSource direct = FromProgramFile(path, size);
+                    if (direct != null)
                     {
-                        return FromSystemIndex(better, size);
+                        return direct;
                     }
                 }
 
@@ -7488,18 +7524,14 @@ namespace RetroBar.StartMenu
 
                 if (IsGenericIcon(info.iIcon))
                 {
-                    // The blank document icon for an installed app: the icon cache was caught mid-refresh. Ask again.
-                    for (int attempt = 0; attempt < 3; attempt++)
+                    // Windows' icon cache gave its blank placeholder for an installed desktop program, which the Apps
+                    // folder lists by its path: read the icon straight from the program instead
+                    const string appsFolder = "shell:AppsFolder\\";
+                    string appId = parsingName.StartsWith(appsFolder, StringComparison.OrdinalIgnoreCase) ? parsingName.Substring(appsFolder.Length) : null;
+                    ImageSource direct = FromProgramFile(RetroBar.Superbar.TaskbarPins.ProgramPathFromAppId(appId), size);
+                    if (direct != null)
                     {
-                        Thread.Sleep(150);
-                        var again = new StartMenuNative.SHFILEINFO();
-
-                        if (StartMenuNative.SHGetFileInfoPidl(pidl, 0, ref again, (uint)Marshal.SizeOf(again), StartMenuNative.SHGFI_PIDL | StartMenuNative.SHGFI_SYSICONINDEX) != IntPtr.Zero
-                            && !IsGenericIcon(again.iIcon))
-                        {
-                            info = again;
-                            break;
-                        }
+                        return direct;
                     }
                 }
 
@@ -7522,50 +7554,114 @@ namespace RetroBar.StartMenu
         private const uint SHGFI_USEFILEATTRIBUTES = 0x000000010;
         private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
 
-        /// <summary>True when a system image list index is Windows' blank document icon, the one given to files it has no icon for.</summary>
+        private static int _genericDocument = int.MinValue;
+        private static int _genericProgram = int.MinValue;
+
+        /// <summary>
+        /// True when a system image list index is one of Windows' blank placeholders: the plain page it gives a file it
+        /// has no icon for, or the plain window it gives a program without an icon. Windows hands these out for real
+        /// programs too while its icon cache is being rebuilt, and the item then keeps the blank icon.
+        /// </summary>
         private static bool IsGenericIcon(int index)
         {
+            if (_genericDocument == int.MinValue)
+            {
+                _genericDocument = PlaceholderIndex("retrostar-placeholder.retrostar-no-such-type");
+                _genericProgram = PlaceholderIndex("retrostar-placeholder.exe");
+            }
+
+            return index == _genericDocument || index == _genericProgram;
+        }
+
+        private static int PlaceholderIndex(string name)
+        {
+            // The file does not exist: with SHGFI_USEFILEATTRIBUTES Windows answers from the name alone
             var info = new StartMenuNative.SHFILEINFO();
-            IntPtr result = StartMenuNative.SHGetFileInfo(".retrostar-no-such-type", FILE_ATTRIBUTE_NORMAL, ref info, (uint)Marshal.SizeOf(info),
+            IntPtr result = StartMenuNative.SHGetFileInfo(name, FILE_ATTRIBUTE_NORMAL, ref info, (uint)Marshal.SizeOf(info),
                 StartMenuNative.SHGFI_SYSICONINDEX | SHGFI_USEFILEATTRIBUTES);
 
-            return result != IntPtr.Zero && info.iIcon == index;
+            return result != IntPtr.Zero ? info.iIcon : -1;
         }
 
         /// <summary>
-        /// A better system image list index for a file whose icon came back as the blank document icon: the same file
-        /// asked again after a moment, then the program a shortcut points at. -1 if neither gives a real icon.
+        /// The icon of a program, read straight from its file rather than from Windows' icon cache: a .exe, or a .lnk
+        /// shortcut's own icon (or, if it names none, its target program's). Null for anything else, or when the file
+        /// holds no icon. Used for Quick Launch, and wherever the cache answered with a blank placeholder.
         /// </summary>
-        private static int ResolveGenericIcon(string path)
+        public static ImageSource FromProgramFile(string path, ShellIconSize size)
         {
-            for (int attempt = 0; attempt < 3; attempt++)
+            try
             {
-                Thread.Sleep(150);
-                var info = new StartMenuNative.SHFILEINFO();
-
-                if (StartMenuNative.SHGetFileInfo(path, 0, ref info, (uint)Marshal.SizeOf(info), StartMenuNative.SHGFI_SYSICONINDEX) != IntPtr.Zero
-                    && !IsGenericIcon(info.iIcon))
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
                 {
-                    return info.iIcon;
+                    return null;
                 }
+
+                string extension = Path.GetExtension(path);
+
+                if (string.Equals(extension, ".exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    return ExtractIcon(path, 0, size);
+                }
+
+                if (!string.Equals(extension, ".lnk", StringComparison.OrdinalIgnoreCase)
+                    || !RetroBar.Superbar.TaskbarPins.GetShortcutIcon(path, out string iconFile, out int iconIndex, out string target))
+                {
+                    return null;
+                }
+
+                ImageSource icon = null;
+
+                if (!string.IsNullOrEmpty(iconFile) && File.Exists(iconFile))
+                {
+                    icon = ExtractIcon(iconFile, iconIndex, size);
+                }
+
+                if (icon == null && !string.IsNullOrEmpty(target) && File.Exists(target)
+                    && string.Equals(Path.GetExtension(target), ".exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    icon = ExtractIcon(target, 0, size);
+                }
+
+                return icon;
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Debug($"ShellIcons: Unable to read the icon of {path}: {e.Message}");
+                return null;
+            }
+        }
+
+        private static ImageSource ExtractIcon(string file, int index, ShellIconSize size)
+        {
+            // The same pixel size the system image list would have given
+            int pixels = size switch { ShellIconSize.Small => 16, ShellIconSize.ExtraLarge => 48, _ => 32 };
+            IntPtr imageList = GetImageList(size);
+            if (imageList != IntPtr.Zero && ImageList_GetIconSize(imageList, out int cx, out _) && cx > 0)
+            {
+                pixels = cx;
             }
 
-            string target = string.Equals(Path.GetExtension(path), ".lnk", StringComparison.OrdinalIgnoreCase)
-                ? RetroBar.Superbar.TaskbarPins.GetShortcutTarget(path)
-                : null;
-
-            if (!string.IsNullOrEmpty(target) && File.Exists(target))
+            if (SHDefExtractIcon(file, index, 0, out IntPtr large, out IntPtr small, (uint)pixels) != 0 || large == IntPtr.Zero)
             {
-                var info = new StartMenuNative.SHFILEINFO();
-
-                if (StartMenuNative.SHGetFileInfo(target, 0, ref info, (uint)Marshal.SizeOf(info), StartMenuNative.SHGFI_SYSICONINDEX) != IntPtr.Zero
-                    && !IsGenericIcon(info.iIcon))
-                {
-                    return info.iIcon;
-                }
+                return null;
             }
 
-            return -1;
+            try
+            {
+                BitmapSource source = Imaging.CreateBitmapSourceFromHIcon(large, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                source.Freeze();
+                return source;
+            }
+            finally
+            {
+                StartMenuNative.DestroyIcon(large);
+
+                if (small != IntPtr.Zero)
+                {
+                    StartMenuNative.DestroyIcon(small);
+                }
+            }
         }
 
         private const uint SHGFI_ICONLOCATION = 0x000001000;

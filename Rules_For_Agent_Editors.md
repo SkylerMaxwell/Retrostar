@@ -211,8 +211,10 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
   Retrostar's value; remove keys Retrostar created when they are left empty; follow Vista's file if the install folder
   moves; refresh Windows' icons (`SHChangeNotify`, `ie4uinit -show`) after every change; read Vista's file only as data.
   Retrostar's own icons use Vista's file too while the scheme is on (`ShellIcons` through `MapToVista`).
-  `ShellIcons` never shows Windows' blank document icon for a file or app that exists: when the system image list
-  returns it (icon cache refreshing, unreadable shortcut icon), ask again, then use the shortcut target's icon.
+  Icons never show Windows' blank placeholders (plain page / plain window) for a program that has an icon, and fixing
+  this never needs a sign-out or restart: when the system image list returns a placeholder, `ShellIcons` reads the icon
+  straight from the file (`FromProgramFile`: the .exe, the shortcut's icon location, else its target .exe; Apps-folder
+  desktop programs through `ProgramPathFromAppId`). Quick Launch buttons always read .exe/.lnk icons that way.
 - **Uninstalling returns Windows to exactly how it was, without exceptions.** Every change Retrostar makes to Windows
   outside its own folders (registry, files such as desktop.ini, machine-wide settings, copies of files) must be backed
   up before it is made and undone by `RetroBar.exe --restore-windows`, which the uninstaller runs (`[UninstallRun]` in

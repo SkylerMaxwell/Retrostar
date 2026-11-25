@@ -4457,10 +4457,15 @@ namespace RetroBar.Controls
 // <RETROSTAR_SOURCE_BEGIN path="RetroBar/Controls/ToolbarButton.xaml.cs">
 namespace RetroBar.Controls
 {
+    using RetroBar.StartMenu;
     using RetroBar.Utilities;
+    using System;
+    using System.Collections.Generic;
+    using System.Globalization;
     using System.Windows;
     using System.Windows.Controls;
     using System.Windows.Data;
+    using System.Windows.Media;
 
     /// <summary>
     /// Interaction logic for ToolbarButton.xaml
@@ -4484,9 +4489,53 @@ namespace RetroBar.Controls
                 bindingPath = "LargeIcon";
             }
 
-            Binding iconBinding = new Binding(bindingPath);
-            iconBinding.Mode = BindingMode.OneWay;
+            // Programs and shortcuts take their icon straight from the file, so a blank placeholder left in Windows'
+            // icon cache never shows; anything else, or a file without an icon, keeps the shell's icon
+            var iconBinding = new MultiBinding
+            {
+                Mode = BindingMode.OneWay,
+                Converter = new ProgramIconConverter(useLargeIcons ? ShellIconSize.Large : ShellIconSize.Small)
+            };
+            iconBinding.Bindings.Add(new Binding(bindingPath) { Mode = BindingMode.OneWay });
+            iconBinding.Bindings.Add(new Binding("Path") { Mode = BindingMode.OneWay });
             ToolbarIcon.SetBinding(Image.SourceProperty, iconBinding);
+        }
+
+        private sealed class ProgramIconConverter : IMultiValueConverter
+        {
+            private static readonly Dictionary<string, ImageSource> _cache = new Dictionary<string, ImageSource>(StringComparer.OrdinalIgnoreCase);
+            private readonly ShellIconSize _size;
+
+            public ProgramIconConverter(ShellIconSize size)
+            {
+                _size = size;
+            }
+
+            public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
+            {
+                ImageSource shellIcon = values.Length > 0 ? values[0] as ImageSource : null;
+                string path = values.Length > 1 ? values[1] as string : null;
+
+                if (string.IsNullOrEmpty(path))
+                {
+                    return shellIcon;
+                }
+
+                // A shortcut changed since is read again
+                string key = _size + "|" + path + "|" + System.IO.File.GetLastWriteTimeUtc(path).Ticks;
+                if (!_cache.TryGetValue(key, out ImageSource icon))
+                {
+                    icon = ShellIcons.FromProgramFile(path, _size);
+                    _cache[key] = icon;
+                }
+
+                return icon ?? shellIcon;
+            }
+
+            public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)
+            {
+                throw new NotSupportedException();
+            }
         }
     }
 }
