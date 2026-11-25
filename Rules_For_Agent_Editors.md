@@ -210,6 +210,11 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
   `%ProgramData%\RetroBar\vista-shell-icons-backup.json` for the stock icons); restore only what still holds
   Retrostar's value; remove keys Retrostar created when they are left empty; follow Vista's file if the install folder
   moves; refresh Windows' icons (`SHChangeNotify`, `ie4uinit -show`) after every change; read Vista's file only as data.
+  Explorer reads the stock icons only at start-up, so it is restarted (`RestartExplorer`: Task Manager's exit message
+  to Explorer's own `Shell_TrayWnd`, never Retrostar's; icon cache cleared; started again only if Windows does not)
+  once after the icons go in (`Backup.ExplorerRestarted`) and after they are removed, and only when Explorer is the
+  shell. Never tell the user to sign out or reboot for icons. All registry access in `VistaIconScheme` goes through the
+  64-bit view on 64-bit Windows (`UserRoot`, `MachineRoot`, `ClassesView`), so the x86 build writes what Explorer reads.
   Retrostar's own icons use Vista's file too while the scheme is on (`ShellIcons` through `MapToVista`).
   Icons never show Windows' blank placeholders (plain page / plain window) for a program that has an icon, and fixing
   this never needs a sign-out or restart. Programs and shortcuts always take their icon straight from the file

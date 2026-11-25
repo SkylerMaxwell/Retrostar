@@ -3091,7 +3091,8 @@ namespace RetroBar.Utilities
     ///     file in %ProgramData%, which every user can read. Values another tool set there are left alone.
     /// Everything changed is backed up before it is changed, and restoring puts back only what still holds Retrostar's
     /// value, so a change the user made meanwhile is kept. Vista's file is only ever read as data. After each change
-    /// Windows is told its icons changed, so Explorer redraws them without a restart.
+    /// Windows is told its icons changed; and since Explorer reads the stock icons only when it starts, it is restarted
+    /// once (with its icon cache cleared) after the icons go in and after they are removed: no sign-out is ever needed.
     /// </summary>
     internal static class VistaIconScheme
     {
@@ -3100,6 +3101,12 @@ namespace RetroBar.Utilities
 
         /// <summary>Elevated helper: "--vista-shell-icons apply &lt;file&gt;" or "--vista-shell-icons remove".</summary>
         public const string ShellIconsArgument = "--vista-shell-icons";
+
+        // The 64-bit registry on 64-bit Windows, also from the 32-bit build, so Explorer reads exactly what is written
+        private static readonly RegistryView View = Environment.Is64BitOperatingSystem ? RegistryView.Registry64 : RegistryView.Default;
+        private static readonly RegistryKey UserRoot = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, View);
+        private static readonly RegistryKey MachineRoot = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, View);
+        private static readonly RegistryKey ClassesView = RegistryKey.OpenBaseKey(RegistryHive.ClassesRoot, View);
 
         private const string ClassesRoot = @"Software\Classes";
         private const string ShellIconsKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons";
@@ -3151,6 +3158,8 @@ namespace RetroBar.Utilities
             public List<FolderEntry> Folders { get; set; } = new List<FolderEntry>();
             /// <summary>The UAC prompt for the stock icons was declined; not asked again until the setting is turned on again.</summary>
             public bool ShellIconsDeclined { get; set; }
+            /// <summary>Explorer has been restarted once since the icons went in, so it shows them.</summary>
+            public bool ExplorerRestarted { get; set; }
         }
 
         /// <summary>A Shell Icons value Retrostar added (%ProgramData%\RetroBar).</summary>
@@ -3311,10 +3320,16 @@ namespace RetroBar.Utilities
 
                 RefreshIcons(null);
 
-                if (askForStockIcons)
+                // In the background, so the taskbar is not held up by the UAC prompt or the restart
+                Task.Run(() =>
                 {
-                    Task.Run(() => ApplyStockIcons(iconFile));
-                }
+                    if (askForStockIcons)
+                    {
+                        ApplyStockIcons(iconFile);
+                    }
+
+                    RestartExplorerOnce();
+                });
             }
             catch (Exception e)
             {
@@ -3332,6 +3347,7 @@ namespace RetroBar.Utilities
             _activeIds = null;
 
             var folders = new List<string>();
+            bool restored = false;
 
             try
             {
@@ -3341,6 +3357,7 @@ namespace RetroBar.Utilities
 
                     if (backup != null)
                     {
+                        restored = true;
                         RestoreRegistry(backup);
                         folders = RestoreFolders(backup);
                         File.Delete(BackupPath());
@@ -3358,6 +3375,7 @@ namespace RetroBar.Utilities
                 {
                     if (RunShellIcons("remove", null))
                     {
+                        restored = true;
                         break;
                     }
 
@@ -3370,6 +3388,19 @@ namespace RetroBar.Utilities
             }
 
             RefreshIcons(folders);
+
+            if (restored)
+            {
+                // The uninstaller waits for Windows' icons to be back; the setting turned off does not hold up the taskbar
+                if (uninstalling)
+                {
+                    RestartExplorer();
+                }
+                else
+                {
+                    Task.Run(RestartExplorer);
+                }
+            }
         }
 
         /// <summary>Entry point of the elevated helper (ShellIconsArgument). Returns the process exit code.</summary>
@@ -3534,7 +3565,7 @@ namespace RetroBar.Utilities
             {
                 try
                 {
-                    using (RegistryKey key = Registry.CurrentUser.CreateSubKey($@"{ClassesRoot}\{entry.Key}"))
+                    using (RegistryKey key = UserRoot.CreateSubKey($@"{ClassesRoot}\{entry.Key}"))
                     {
                         key.SetValue(entry.Value, entry.Applied, RegistryValueKind.String);
                         added++;
@@ -3553,7 +3584,7 @@ namespace RetroBar.Utilities
         {
             try
             {
-                using (RegistryKey key = Registry.CurrentUser.OpenSubKey($@"{ClassesRoot}\{entry.Key}", true))
+                using (RegistryKey key = UserRoot.OpenSubKey($@"{ClassesRoot}\{entry.Key}", true))
                 {
                     string current = key?.GetValue(entry.Value, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
                     if (key == null || !string.Equals(current, entry.Applied, StringComparison.OrdinalIgnoreCase))
@@ -3577,7 +3608,7 @@ namespace RetroBar.Utilities
             {
                 try
                 {
-                    using (RegistryKey key = Registry.CurrentUser.OpenSubKey($@"{ClassesRoot}\{entry.Key}", true))
+                    using (RegistryKey key = UserRoot.OpenSubKey($@"{ClassesRoot}\{entry.Key}", true))
                     {
                         if (key == null)
                         {
@@ -3607,7 +3638,7 @@ namespace RetroBar.Utilities
                         string created = $@"{ClassesRoot}\{entry.CreatedKeys[i]}";
                         bool empty;
 
-                        using (RegistryKey key = Registry.CurrentUser.OpenSubKey(created))
+                        using (RegistryKey key = UserRoot.OpenSubKey(created))
                         {
                             empty = key != null && key.SubKeyCount == 0 && key.ValueCount == 0;
                         }
@@ -3617,7 +3648,7 @@ namespace RetroBar.Utilities
                             break;
                         }
 
-                        Registry.CurrentUser.DeleteSubKey(created, false);
+                        UserRoot.DeleteSubKey(created, false);
                     }
                 }
                 catch (Exception e)
@@ -3636,7 +3667,7 @@ namespace RetroBar.Utilities
         {
             var found = new List<(string, string, int)>();
 
-            using (RegistryKey root = Registry.ClassesRoot)
+            RegistryKey root = ClassesView;
             {
                 foreach (string name in root.GetSubKeyNames())
                 {
@@ -3705,7 +3736,7 @@ namespace RetroBar.Utilities
 
                 if (!missing)
                 {
-                    using (RegistryKey existing = Registry.CurrentUser.OpenSubKey(path))
+                    using (RegistryKey existing = UserRoot.OpenSubKey(path))
                     {
                         missing = existing == null;
                     }
@@ -3717,7 +3748,7 @@ namespace RetroBar.Utilities
                 }
             }
 
-            using (RegistryKey current = Registry.CurrentUser.OpenSubKey($@"{ClassesRoot}\{key}"))
+            using (RegistryKey current = UserRoot.OpenSubKey($@"{ClassesRoot}\{key}"))
             {
                 if (current != null && Array.IndexOf(current.GetValueNames(), value) >= 0)
                 {
@@ -3965,7 +3996,7 @@ namespace RetroBar.Utilities
             var backup = new MachineBackup { IconFile = machineFile };
             var planned = new List<ShellIconEntry>();
 
-            using (RegistryKey existing = Registry.LocalMachine.OpenSubKey(ShellIconsKey))
+            using (RegistryKey existing = MachineRoot.OpenSubKey(ShellIconsKey))
             {
                 backup.CreatedKey = existing == null;
 
@@ -3994,7 +4025,7 @@ namespace RetroBar.Utilities
             backup.Entries = planned;
             WriteMachineBackup(backup);
 
-            using (RegistryKey key = Registry.LocalMachine.CreateSubKey(ShellIconsKey))
+            using (RegistryKey key = MachineRoot.CreateSubKey(ShellIconsKey))
             {
                 foreach (ShellIconEntry entry in planned)
                 {
@@ -4014,7 +4045,7 @@ namespace RetroBar.Utilities
                 return;
             }
 
-            using (RegistryKey key = Registry.LocalMachine.OpenSubKey(ShellIconsKey, true))
+            using (RegistryKey key = MachineRoot.OpenSubKey(ShellIconsKey, true))
             {
                 if (key != null)
                 {
@@ -4032,14 +4063,14 @@ namespace RetroBar.Utilities
             if (backup.CreatedKey)
             {
                 bool empty;
-                using (RegistryKey key = Registry.LocalMachine.OpenSubKey(ShellIconsKey))
+                using (RegistryKey key = MachineRoot.OpenSubKey(ShellIconsKey))
                 {
                     empty = key != null && key.ValueCount == 0 && key.SubKeyCount == 0;
                 }
 
                 if (empty)
                 {
-                    Registry.LocalMachine.DeleteSubKey(ShellIconsKey, false);
+                    MachineRoot.DeleteSubKey(ShellIconsKey, false);
                 }
             }
 
@@ -4074,6 +4105,161 @@ namespace RetroBar.Utilities
             // An index: the resource ID at that position in Windows' own file
             List<int> order = ReadIconOrder(Environment.ExpandEnvironmentVariables(info.szPath));
             return info.iIcon < order.Count ? order[info.iIcon] : 0;
+        }
+
+        #endregion
+
+        #region Explorer
+
+        private const uint WM_EXITEXPLORER = 0x5B4; // WM_USER + 436: the message Task Manager's "Restart" sends
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetShellWindow();
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string windowName);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+        [DllImport("user32.dll")]
+        private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+        /// <summary>Restarts Explorer the first time after the icons went in (each time the setting is turned on).</summary>
+        private static void RestartExplorerOnce()
+        {
+            bool restart = false;
+
+            try
+            {
+                using (new IconLock())
+                {
+                    Backup backup = ReadBackup();
+
+                    // No backup: the setting was turned off meanwhile, and that restarts Explorer itself
+                    if (backup != null && !backup.ExplorerRestarted)
+                    {
+                        backup.ExplorerRestarted = true;
+                        WriteBackup(backup);
+                        restart = true;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaIconScheme: could not read the backup: {e.Message}");
+            }
+
+            if (restart)
+            {
+                RestartExplorer();
+            }
+        }
+
+        /// <summary>
+        /// Explorer reads the stock icons only when it starts and keeps every icon it has drawn, so after the icons change
+        /// it is restarted, as Task Manager's "Restart" does, with its icon cache cleared: the new icons show everywhere
+        /// at once, with no sign-out. Retrostar's taskbar stays (it re-hides Windows' taskbar when Explorer comes back).
+        /// Nothing happens when Explorer is not the shell.
+        /// </summary>
+        private static void RestartExplorer()
+        {
+            try
+            {
+                Process shell = ExplorerShellProcess();
+                if (shell == null)
+                {
+                    return;
+                }
+
+                using (shell)
+                {
+                    // Explorer's own taskbar window (Retrostar has one of the same class for the notification area)
+                    IntPtr tray = IntPtr.Zero;
+                    while ((tray = FindWindowEx(IntPtr.Zero, tray, "Shell_TrayWnd", null)) != IntPtr.Zero)
+                    {
+                        GetWindowThreadProcessId(tray, out uint owner);
+                        if (owner == (uint)shell.Id)
+                        {
+                            PostMessage(tray, WM_EXITEXPLORER, IntPtr.Zero, IntPtr.Zero);
+                            break;
+                        }
+                    }
+
+                    if (!shell.WaitForExit(10000))
+                    {
+                        shell.Kill();
+                        shell.WaitForExit(5000);
+                    }
+                }
+
+                ClearIconCache();
+
+                // Windows may start the shell again by itself; otherwise it is started here
+                for (int waited = 0; waited < 2000 && GetShellWindow() == IntPtr.Zero; waited += 100)
+                {
+                    Thread.Sleep(100);
+                }
+
+                if (GetShellWindow() == IntPtr.Zero)
+                {
+                    string explorer = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+                    Process.Start(new ProcessStartInfo(explorer) { UseShellExecute = false })?.Dispose();
+                }
+
+                ShellLogger.Info("VistaIconScheme: Explorer restarted to show the icons");
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaIconScheme: could not restart Explorer: {e.Message}");
+            }
+        }
+
+        /// <summary>The Explorer process that is the shell in this session, or null.</summary>
+        private static Process ExplorerShellProcess()
+        {
+            IntPtr shellWindow = GetShellWindow();
+            if (shellWindow == IntPtr.Zero || GetWindowThreadProcessId(shellWindow, out uint id) == 0)
+            {
+                return null;
+            }
+
+            Process process = Process.GetProcessById((int)id);
+            if (string.Equals(process.ProcessName, "explorer", StringComparison.OrdinalIgnoreCase))
+            {
+                return process;
+            }
+
+            process.Dispose();
+            return null;
+        }
+
+        /// <summary>Deletes Windows' per-user icon cache, which it rebuilds by itself; a file still in use is left.</summary>
+        private static void ClearIconCache()
+        {
+            string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            var files = new List<string> { Path.Combine(local, "IconCache.db") };
+
+            string explorerFolder = Path.Combine(local, "Microsoft", "Windows", "Explorer");
+            if (Directory.Exists(explorerFolder))
+            {
+                files.AddRange(Directory.GetFiles(explorerFolder, "iconcache_*.db"));
+            }
+
+            foreach (string file in files)
+            {
+                try
+                {
+                    if (File.Exists(file))
+                    {
+                        File.Delete(file);
+                    }
+                }
+                catch (Exception)
+                {
+                    // In use by another program: Windows refreshes it as icons are drawn again
+                }
+            }
         }
 
         #endregion
