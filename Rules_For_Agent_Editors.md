@@ -195,14 +195,30 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
   `RetroBar/Resources/Sounds` (the csproj and the installer already copy that folder); events this Windows does not
   define are skipped. Start up, log on, log off and shut down are not mapped: Windows 8 and later do not play them
   while a program that started after sign-in is running.
-- Vista icons (`VistaIconScheme`): only per-user overrides (`HKCU\Software\Classes\<ProgID or CLSID\{...}>\DefaultIcon`)
-  of values that name Windows' own `imageres.dll` by resource ID (`imageres.dll,-ID`) where Vista's file has the same
-  ID; Windows merges per-user and machine-wide classes value by value, so only the icon changes. Never write the
-  machine-wide registry, never touch extension (`.ext`) keys or associations, never change a Windows file, and never
-  run code from the Vista DLL (it is read as data only). Same backup, owner, watchdog and mutex rules as the sounds;
-  Restore puts back only values that still hold Retrostar's, removes keys it created if they are left empty, and
-  `SHChangeNotify(SHCNE_ASSOCCHANGED)` follows every apply and restore so Explorer redraws without a restart. Icons
-  Windows draws from stock icons only (the plain folder on most Windows 11 builds) have no per-user override.
+- Vista icons (`VistaIconScheme`, setting `UseVistaIcons`): Vista's imageres.dll
+  (`Resources\VistaIcons\vista-imageres.dll`) replaces Windows' default icons wherever Windows names its own
+  imageres.dll by a resource ID Vista's file has (same IDs, same pictures). They stay when Retrostar closes; turning the
+  setting off or uninstalling restores Windows exactly. Three places, nothing else:
+  1. per-user `HKCU\Software\Classes\<ProgID or CLSID\{...}>\DefaultIcon` values (never `.ext` keys or associations);
+  2. the `IconResource` line of the `desktop.ini` of the user's special folders, rewritten in its own encoding with its
+     attributes kept; folders under OneDrive are never touched, so nothing syncs to other PCs;
+  3. Windows' stock icons in `HKLM\...\Explorer\Shell Icons`, written only by the elevated helper
+     (`--vista-shell-icons apply|remove`) after one UAC prompt, pointing at a copy of Vista's file in
+     `%ProgramData%\RetroBar\VistaIcons` that every user can read; overlays (28-30) and values someone else set are
+     never changed, and a declined prompt is not asked again until the setting is turned on again.
+  Back up before changing (`%LOCALAPPDATA%\RetroBar\vista-icons-backup.json`, and
+  `%ProgramData%\RetroBar\vista-shell-icons-backup.json` for the stock icons); restore only what still holds
+  Retrostar's value; remove keys Retrostar created when they are left empty; follow Vista's file if the install folder
+  moves; refresh Windows' icons (`SHChangeNotify`, `ie4uinit -show`) after every change; read Vista's file only as data.
+  Retrostar's own icons use Vista's file too while the scheme is on (`ShellIcons` through `MapToVista`).
+  `ShellIcons` never shows Windows' blank document icon for a file or app that exists: when the system image list
+  returns it (icon cache refreshing, unreadable shortcut icon), ask again, then use the shortcut target's icon.
+- **Uninstalling returns Windows to exactly how it was, without exceptions.** Every change Retrostar makes to Windows
+  outside its own folders (registry, files such as desktop.ini, machine-wide settings, copies of files) must be backed
+  up before it is made and undone by `RetroBar.exe --restore-windows`, which the uninstaller runs (`[UninstallRun]` in
+  `installer.iss`) before any file is removed. A new feature that changes Windows adds its restore to that path in
+  `Program.Main`; a restore that needs administrator approval keeps asking during uninstall rather than leave Windows
+  broken (for example, blank icons that point at a deleted file).
 - Windows 7 input language: Windows 7 Aero hides the toolbar grip (`ToolbarThumb`, which Windows 7 only shows beside
   the language button since it has no Quick Launch) and centres the language name (`LanguageBar`, `InputLanguage`).
   Other themes keep theirs.
@@ -312,7 +328,7 @@ Taskbar windows per screen, Explorer, the Windows Start menu, updates, clock fly
 - `RetroBar/Utilities/Updater.cs` — optional update check (off by default)
 - `RetroBar/Utilities/ClockFlyoutLauncher.cs` — opens the Windows clock and calendar flyout
 - `RetroBar/Utilities/VolumeChanger.cs` — system volume changes from the tray
-- `RetroBar/Utilities/VistaIconScheme.cs` — Windows Vista's icons while Retrostar runs: per-user DefaultIcon overrides pointing Windows' imageres.dll icons at `Resources\VistaIcons\vista-imageres.dll` (same resource IDs), with backup, restore and the watchdog process (`--restore-vista-icons <pid>`, handled first in `Program.Main`)
+- `RetroBar/Utilities/VistaIconScheme.cs` — Windows Vista's icons until turned off or uninstalled: per-user DefaultIcon overrides, special-folder desktop.ini, and machine-wide stock icons (elevated helper `--vista-shell-icons`), all backed up and restored by `--restore-windows` (the uninstaller), both handled first in `Program.Main`
 - `RetroBar/Utilities/VistaSoundScheme.cs` — Windows Vista's sounds while Retrostar runs: points the user's sound scheme at `Resources\Sounds`, backs up and restores the original entries, and the watchdog process (`--restore-vista-sounds <pid>`, handled first in `Program.Main`)
 
 ### [1400] INPUT
