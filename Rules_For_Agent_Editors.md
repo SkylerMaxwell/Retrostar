@@ -212,9 +212,11 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
   moves; refresh Windows' icons (`SHChangeNotify`, `ie4uinit -show`) after every change; read Vista's file only as data.
   Retrostar's own icons use Vista's file too while the scheme is on (`ShellIcons` through `MapToVista`).
   Icons never show Windows' blank placeholders (plain page / plain window) for a program that has an icon, and fixing
-  this never needs a sign-out or restart: when the system image list returns a placeholder, `ShellIcons` reads the icon
-  straight from the file (`FromProgramFile`: the .exe, the shortcut's icon location, else its target .exe; Apps-folder
-  desktop programs through `ProgramPathFromAppId`). Quick Launch buttons always read .exe/.lnk icons that way.
+  this never needs a sign-out or restart. Programs and shortcuts always take their icon straight from the file
+  (`ShellIcons.FromProgramFile`: the .exe, the shortcut's icon location, else its target .exe), never from Windows'
+  icon cache: `FromPath` for .exe/.lnk, Quick Launch buttons, and Apps-folder desktop programs (the Start menu
+  shortcut with the same name that is the same program by app ID or target, else the path in the app ID). Store apps
+  whose cached icon is a placeholder are drawn through `IShellItemImageFactory`.
 - **Uninstalling returns Windows to exactly how it was, without exceptions.** Every change Retrostar makes to Windows
   outside its own folders (registry, files such as desktop.ini, machine-wide settings, copies of files) must be backed
   up before it is made and undone by `RetroBar.exe --restore-windows`, which the uninstaller runs (`[UninstallRun]` in

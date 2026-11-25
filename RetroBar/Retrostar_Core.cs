@@ -6153,7 +6153,7 @@ namespace RetroBar.Superbar
             }
         }
 
-        private static string GetShortcutAppId(string shortcutPath)
+        internal static string GetShortcutAppId(string shortcutPath)
         {
             IPropertyStore store = null;
 
@@ -7392,6 +7392,7 @@ namespace RetroBar.StartMenu
     using ManagedShell.Common.Logging;
     using RetroBar.Utilities;
     using System;
+    using System.Collections.Generic;
     using System.IO;
     using System.Runtime.InteropServices;
     using System.Threading;
@@ -7462,22 +7463,19 @@ namespace RetroBar.StartMenu
                     return vista;
                 }
 
+                // Programs and shortcuts: straight from the file, so a blank placeholder in Windows' icon cache never shows
+                ImageSource direct = FromProgramFile(path, size);
+                if (direct != null)
+                {
+                    return direct;
+                }
+
                 var info = new StartMenuNative.SHFILEINFO();
                 IntPtr result = StartMenuNative.SHGetFileInfo(path, 0, ref info, (uint)Marshal.SizeOf(info), StartMenuNative.SHGFI_SYSICONINDEX);
 
                 if (result == IntPtr.Zero)
                 {
                     return null;
-                }
-
-                if (IsGenericIcon(info.iIcon))
-                {
-                    // Windows' icon cache gave its blank placeholder: read the icon straight from the program instead
-                    ImageSource direct = FromProgramFile(path, size);
-                    if (direct != null)
-                    {
-                        return direct;
-                    }
                 }
 
                 return FromSystemIndex(info.iIcon, size);
@@ -7514,6 +7512,24 @@ namespace RetroBar.StartMenu
                     return vista;
                 }
 
+                const string appsFolder = "shell:AppsFolder\\";
+                string appId = parsingName.StartsWith(appsFolder, StringComparison.OrdinalIgnoreCase) ? parsingName.Substring(appsFolder.Length) : null;
+
+                if (!string.IsNullOrEmpty(appId) && !AppCatalog.IsPackagedApp(appId))
+                {
+                    // A desktop program in the Apps folder comes from a Start menu shortcut: read the icon straight from
+                    // that shortcut (found by the name the Apps folder shows) or from the program the ID names, so a
+                    // blank placeholder in Windows' icon cache never shows
+                    string program = RetroBar.Superbar.TaskbarPins.ProgramPathFromAppId(appId);
+                    ImageSource direct = FromProgramFile(FindStartMenuShortcut(GetDisplayName(pidl), appId, program), size)
+                        ?? FromProgramFile(program, size);
+
+                    if (direct != null)
+                    {
+                        return direct;
+                    }
+                }
+
                 var info = new StartMenuNative.SHFILEINFO();
                 IntPtr result = StartMenuNative.SHGetFileInfoPidl(pidl, 0, ref info, (uint)Marshal.SizeOf(info), StartMenuNative.SHGFI_PIDL | StartMenuNative.SHGFI_SYSICONINDEX);
 
@@ -7524,14 +7540,12 @@ namespace RetroBar.StartMenu
 
                 if (IsGenericIcon(info.iIcon))
                 {
-                    // Windows' icon cache gave its blank placeholder for an installed desktop program, which the Apps
-                    // folder lists by its path: read the icon straight from the program instead
-                    const string appsFolder = "shell:AppsFolder\\";
-                    string appId = parsingName.StartsWith(appsFolder, StringComparison.OrdinalIgnoreCase) ? parsingName.Substring(appsFolder.Length) : null;
-                    ImageSource direct = FromProgramFile(RetroBar.Superbar.TaskbarPins.ProgramPathFromAppId(appId), size);
-                    if (direct != null)
+                    // The cache's blank placeholder (Store apps included): ask the item for its picture through the
+                    // shell's image factory, which reads the app's own logo
+                    ImageSource image = FromImageFactory(parsingName, size);
+                    if (image != null)
                     {
-                        return direct;
+                        return image;
                     }
                 }
 
@@ -7660,6 +7674,249 @@ namespace RetroBar.StartMenu
                 if (small != IntPtr.Zero)
                 {
                     StartMenuNative.DestroyIcon(small);
+                }
+            }
+        }
+
+        private const uint SHGFI_DISPLAYNAME = 0x000000200;
+
+        private static string GetDisplayName(IntPtr pidl)
+        {
+            var info = new StartMenuNative.SHFILEINFO();
+            return StartMenuNative.SHGetFileInfoPidl(pidl, 0, ref info, (uint)Marshal.SizeOf(info), StartMenuNative.SHGFI_PIDL | SHGFI_DISPLAYNAME) != IntPtr.Zero
+                ? info.szDisplayName
+                : null;
+        }
+
+        private static readonly object _shortcutLock = new object();
+        private static Dictionary<string, List<string>> _shortcuts;
+        private static DateTime _shortcutsReadAt;
+
+        /// <summary>
+        /// The Start menu shortcut an Apps folder desktop program comes from: one with the name the Apps folder shows
+        /// that is also that program, by its app ID or by its target. Null if there is none. The folders are read again
+        /// at most once a minute.
+        /// </summary>
+        private static string FindStartMenuShortcut(string name, string appId, string program)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return null;
+            }
+
+            List<string> candidates;
+
+            lock (_shortcutLock)
+            {
+                bool stale = _shortcuts == null || DateTime.UtcNow - _shortcutsReadAt > TimeSpan.FromMinutes(1);
+
+                if (_shortcuts == null || (!_shortcuts.ContainsKey(name) && stale))
+                {
+                    var shortcuts = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                    foreach (Environment.SpecialFolder root in new[] { Environment.SpecialFolder.Programs, Environment.SpecialFolder.CommonPrograms })
+                    {
+                        AddShortcuts(Environment.GetFolderPath(root), shortcuts, 0);
+                    }
+
+                    _shortcuts = shortcuts;
+                    _shortcutsReadAt = DateTime.UtcNow;
+                }
+
+                if (!_shortcuts.TryGetValue(name, out candidates))
+                {
+                    return null;
+                }
+            }
+
+            foreach (string shortcut in candidates)
+            {
+                if (string.Equals(RetroBar.Superbar.TaskbarPins.GetShortcutAppId(shortcut), appId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return shortcut;
+                }
+
+                if (!string.IsNullOrEmpty(program)
+                    && RetroBar.Superbar.TaskbarPins.GetShortcutIcon(shortcut, out _, out _, out string target)
+                    && string.Equals(target, program, StringComparison.OrdinalIgnoreCase))
+                {
+                    return shortcut;
+                }
+            }
+
+            return null;
+        }
+
+        private static void AddShortcuts(string folder, Dictionary<string, List<string>> shortcuts, int depth)
+        {
+            if (string.IsNullOrEmpty(folder) || depth > 8)
+            {
+                return;
+            }
+
+            try
+            {
+                foreach (string file in Directory.EnumerateFiles(folder, "*.lnk"))
+                {
+                    string name = Path.GetFileNameWithoutExtension(file);
+                    if (!shortcuts.TryGetValue(name, out List<string> files))
+                    {
+                        files = new List<string>();
+                        shortcuts.Add(name, files);
+                    }
+
+                    files.Add(file);
+                }
+
+                foreach (string subfolder in Directory.EnumerateDirectories(folder))
+                {
+                    AddShortcuts(subfolder, shortcuts, depth + 1);
+                }
+            }
+            catch (Exception)
+            {
+                // A folder this user may not read is skipped
+            }
+        }
+
+        [ComImport]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        [Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b")]
+        private interface IShellItemImageFactory
+        {
+            [PreserveSig]
+            int GetImage(NativeSize size, int flags, out IntPtr bitmap);
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct NativeSize
+        {
+            public int cx;
+            public int cy;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BITMAP
+        {
+            public int bmType;
+            public int bmWidth;
+            public int bmHeight;
+            public int bmWidthBytes;
+            public ushort bmPlanes;
+            public ushort bmBitsPixel;
+            public IntPtr bmBits;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BITMAPINFOHEADER
+        {
+            public uint biSize;
+            public int biWidth;
+            public int biHeight;
+            public ushort biPlanes;
+            public ushort biBitCount;
+            public uint biCompression;
+            public uint biSizeImage;
+            public int biXPelsPerMeter;
+            public int biYPelsPerMeter;
+            public uint biClrUsed;
+            public uint biClrImportant;
+        }
+
+        private const int SIIGBF_ICONONLY = 0x4;
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+        private static extern int SHCreateItemFromParsingName(string path, IntPtr bindContext, [In] ref Guid riid,
+            [MarshalAs(UnmanagedType.Interface)] out IShellItemImageFactory item);
+
+        [DllImport("gdi32.dll")]
+        private static extern int GetObject(IntPtr handle, int size, ref BITMAP bitmap);
+
+        [DllImport("gdi32.dll")]
+        private static extern int GetDIBits(IntPtr dc, IntPtr bitmap, uint start, uint lines, [Out] byte[] bits, ref BITMAPINFOHEADER info, uint usage);
+
+        [DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr handle);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetDC(IntPtr window);
+
+        [DllImport("user32.dll")]
+        private static extern int ReleaseDC(IntPtr window, IntPtr dc);
+
+        /// <summary>An item's icon through the shell's image factory, with its transparency; null if it gives none.</summary>
+        private static ImageSource FromImageFactory(string parsingName, ShellIconSize size)
+        {
+            int pixels = size switch { ShellIconSize.Small => 16, ShellIconSize.ExtraLarge => 48, _ => 32 };
+            IntPtr imageList = GetImageList(size);
+            if (imageList != IntPtr.Zero && ImageList_GetIconSize(imageList, out int cx, out _) && cx > 0)
+            {
+                pixels = cx;
+            }
+
+            IShellItemImageFactory factory = null;
+            IntPtr bitmap = IntPtr.Zero;
+
+            try
+            {
+                Guid iid = typeof(IShellItemImageFactory).GUID;
+                if (SHCreateItemFromParsingName(parsingName, IntPtr.Zero, ref iid, out factory) != 0 || factory == null
+                    || factory.GetImage(new NativeSize { cx = pixels, cy = pixels }, SIIGBF_ICONONLY, out bitmap) != 0 || bitmap == IntPtr.Zero)
+                {
+                    return null;
+                }
+
+                var header = new BITMAP();
+                if (GetObject(bitmap, Marshal.SizeOf<BITMAP>(), ref header) == 0 || header.bmWidth <= 0 || header.bmHeight <= 0)
+                {
+                    return null;
+                }
+
+                int width = header.bmWidth;
+                int height = Math.Abs(header.bmHeight);
+                var info = new BITMAPINFOHEADER
+                {
+                    biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+                    biWidth = width,
+                    biHeight = -height, // top-down rows
+                    biPlanes = 1,
+                    biBitCount = 32
+                };
+
+                byte[] bits = new byte[width * height * 4];
+                IntPtr dc = GetDC(IntPtr.Zero);
+
+                try
+                {
+                    if (GetDIBits(dc, bitmap, 0, (uint)height, bits, ref info, 0) == 0)
+                    {
+                        return null;
+                    }
+                }
+                finally
+                {
+                    ReleaseDC(IntPtr.Zero, dc);
+                }
+
+                // The shell's bitmaps carry premultiplied alpha
+                BitmapSource source = BitmapSource.Create(width, height, 96, 96, PixelFormats.Pbgra32, null, bits, width * 4);
+                source.Freeze();
+                return source;
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Debug($"ShellIcons: Unable to get the image of {parsingName}: {e.Message}");
+                return null;
+            }
+            finally
+            {
+                if (bitmap != IntPtr.Zero)
+                {
+                    DeleteObject(bitmap);
+                }
+
+                if (factory != null && Marshal.IsComObject(factory))
+                {
+                    Marshal.ReleaseComObject(factory);
                 }
             }
         }
