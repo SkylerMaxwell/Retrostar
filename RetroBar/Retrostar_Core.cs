@@ -3086,6 +3086,8 @@ namespace RetroBar.Utilities
     ///     Windows merges per-user and machine-wide classes value by value, so only the icon changes.
     ///  2. The IconResource line of the desktop.ini of the user's special folders (Documents, Pictures, ...), which is
     ///     where those folders take their icon. Folders synced by OneDrive are left alone, so nothing syncs elsewhere.
+    ///     Also the per-user desktop icons (ExplorerRoot) and the picture drawn for every folder (FolderLogoKey), which
+    ///     replaces Windows 11's folder thumbnails with Vista's folder.
     ///  3. Windows' stock icons (plain folders, drives, generic files): HKLM "Shell Icons", machine-wide, written by an
     ///     elevated copy of this executable (ShellIconsArgument) after one UAC prompt. They point at a copy of Vista's
     ///     file in %ProgramData%, which every user can read. Values another tool set there are left alone.
@@ -3113,6 +3115,13 @@ namespace RetroBar.Utilities
         // Per-user icons of the desktop's shell objects (Recycle Bin, This PC, Network, the user's folder). Windows reads
         // these before the classes, and Desktop Icon Settings writes them; Recycle Bin always has them on Windows 10/11.
         private const string ExplorerRoot = @"Software\Microsoft\Windows\CurrentVersion\Explorer";
+
+        // The picture File Explorer draws for every folder in place of Windows 11's folder thumbnails (built from Windows'
+        // own system file, which no setting can point elsewhere): Vista's folder icon, so folders with content match
+        // empty ones. Per-user; under ClassesRoot. A Logo the user already has is kept.
+        private const string FolderLogoKey = @"Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell";
+        private const string FolderLogoValue = "Logo";
+        private const int FolderIconId = 3; // imageres.dll,-3: the folder, in Windows and in Vista
         private const string ShellIconsKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons";
         private const string LockName = "RetroBar.VistaIcons";
         private const string BackupFileName = "vista-icons-backup.json";
@@ -3554,6 +3563,22 @@ namespace RetroBar.Utilities
             }
 
             var planned = new List<RegistryEntry>();
+
+            RegistryEntry logo = backup.Entries.FirstOrDefault(IsFolderLogo);
+            if (logo != null && ReadUserValue(ClassesRoot, FolderLogoKey, FolderLogoValue) == null)
+            {
+                // "Reset folders" in Folder Options removed it: put it back, with the keys that are missing now
+                backup.Entries.Remove(logo);
+                logo = null;
+            }
+
+            if (logo == null && vistaIds.Contains(FolderIconId) && ReadUserValue(ClassesRoot, FolderLogoKey, FolderLogoValue) == null)
+            {
+                RegistryEntry entry = Capture(ClassesRoot, FolderLogoKey, FolderLogoValue);
+                entry.Applied = $"{iconFile},-{FolderIconId}";
+                planned.Add(entry);
+            }
+
             foreach (var (root, key, value, id) in FindOverrides(vistaIds))
             {
                 if (!known.ContainsKey(root + "|" + key + "|" + value))
@@ -3760,6 +3785,20 @@ namespace RetroBar.Utilities
         }
 
         private static string RootOf(RegistryEntry entry) => entry.Root ?? ClassesRoot;
+
+        private static bool IsFolderLogo(RegistryEntry entry) =>
+            string.Equals(RootOf(entry), ClassesRoot, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(entry.Key, FolderLogoKey, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(entry.Value, FolderLogoValue, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>A per-user value as stored (variables not expanded), or null if the key or value does not exist.</summary>
+        private static object ReadUserValue(string root, string key, string value)
+        {
+            using (RegistryKey existing = UserRoot.OpenSubKey($@"{root}\{key}"))
+            {
+                return existing?.GetValue(value, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+            }
+        }
 
         private static RegistryEntry Capture(string root, string key, string value)
         {
@@ -4273,7 +4312,7 @@ namespace RetroBar.Utilities
             return null;
         }
 
-        /// <summary>Deletes Windows' per-user icon cache, which it rebuilds by itself; a file still in use is left.</summary>
+        /// <summary>Deletes Windows' per-user icon and thumbnail caches, which it rebuilds by itself; a file in use is left.</summary>
         private static void ClearIconCache()
         {
             string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -4283,6 +4322,9 @@ namespace RetroBar.Utilities
             if (Directory.Exists(explorerFolder))
             {
                 files.AddRange(Directory.GetFiles(explorerFolder, "iconcache_*.db"));
+
+                // Folder thumbnails already drawn are kept here: cleared so folders change to and from Vista's folder
+                files.AddRange(Directory.GetFiles(explorerFolder, "thumbcache_*.db"));
             }
 
             foreach (string file in files)

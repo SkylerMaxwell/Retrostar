@@ -203,6 +203,10 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
      plus the existing per-user desktop icons `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\CLSID\{...}\DefaultIcon`
      (Recycle Bin, This PC, Network, user folder), which Windows reads before the classes; only values that are
      Windows' own imageres icon are changed (`RegistryEntry.Root` records which of the two roots an entry is under);
+     plus `Logo` = Vista's `-3` under `HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell`
+     (`FolderLogoKey`): Windows 11 draws folders with content as thumbnails built from its own system file, which no
+     setting redirects, so every folder is drawn from Vista's folder instead (file thumbnails stay). A Logo the user
+     already has is kept; one removed by "Reset folders" is put back, recaptured, on the next apply;
   2. the `IconResource` line of the `desktop.ini` of the user's special folders, rewritten in its own encoding with its
      attributes kept; folders under OneDrive are never touched, so nothing syncs to other PCs;
   3. Windows' stock icons in `HKLM\...\Explorer\Shell Icons`, written only by the elevated helper
@@ -214,7 +218,7 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
   Retrostar's value; remove keys Retrostar created when they are left empty; follow Vista's file if the install folder
   moves; refresh Windows' icons (`SHChangeNotify`, `ie4uinit -show`) after every change; read Vista's file only as data.
   Explorer reads the stock icons only at start-up, so it is restarted (`RestartExplorer`: Task Manager's exit message
-  to Explorer's own `Shell_TrayWnd`, never Retrostar's; icon cache cleared; started again only if Windows does not)
+  to Explorer's own `Shell_TrayWnd`, never Retrostar's; icon and thumbnail caches cleared; started again only if Windows does not)
   once after icons are added (`Backup.ExplorerRestarted`, reset whenever new icons are added) and after they are
   removed, and only when Explorer is the
   shell. Never tell the user to sign out or reboot for icons. All registry access in `VistaIconScheme` goes through the

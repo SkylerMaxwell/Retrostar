@@ -14,7 +14,7 @@ It is built on the [ManagedShell](https://github.com/cairoshell/ManagedShell) li
 - Start orb that sits above the open menu
 - Windows key and Ctrl+Esc open the Vista menu
 - Windows 7 taskbar (Windows 7 Aero theme): icon-only buttons that combine each program's windows, pinned programs, live thumbnails, a hover glow in the icon's colour, and a Show Desktop strip
-- Windows Vista icons (Properties > Advanced): Windows' default icons, special folders and stock folder and drive icons come from Vista's imageres.dll; they stay until the setting is turned off or Retrostar is uninstalled, which puts Windows' own back exactly
+- Windows Vista icons (Properties > Advanced): Windows' default icons, desktop icons, special folders and stock folder and drive icons come from Vista's imageres.dll, and every folder is drawn as Vista's folder instead of a Windows 11 folder thumbnail; they stay until the setting is turned off or Retrostar is uninstalled, which puts Windows' own back exactly
 - Windows Vista sounds while Retrostar runs (Properties > Advanced): Windows' own sounds return when it closes
 - Windows 7 Start menu, chosen in Properties > Start Menu: search box in the program list, Devices and Printers, and a Shut down button
 
