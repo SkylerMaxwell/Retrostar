@@ -200,6 +200,9 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
   imageres.dll by a resource ID Vista's file has (same IDs, same pictures). They stay when Retrostar closes; turning the
   setting off or uninstalling restores Windows exactly. Three places, nothing else:
   1. per-user `HKCU\Software\Classes\<ProgID or CLSID\{...}>\DefaultIcon` values (never `.ext` keys or associations);
+     plus the existing per-user desktop icons `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\CLSID\{...}\DefaultIcon`
+     (Recycle Bin, This PC, Network, user folder), which Windows reads before the classes; only values that are
+     Windows' own imageres icon are changed (`RegistryEntry.Root` records which of the two roots an entry is under);
   2. the `IconResource` line of the `desktop.ini` of the user's special folders, rewritten in its own encoding with its
      attributes kept; folders under OneDrive are never touched, so nothing syncs to other PCs;
   3. Windows' stock icons in `HKLM\...\Explorer\Shell Icons`, written only by the elevated helper
@@ -212,7 +215,8 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
   moves; refresh Windows' icons (`SHChangeNotify`, `ie4uinit -show`) after every change; read Vista's file only as data.
   Explorer reads the stock icons only at start-up, so it is restarted (`RestartExplorer`: Task Manager's exit message
   to Explorer's own `Shell_TrayWnd`, never Retrostar's; icon cache cleared; started again only if Windows does not)
-  once after the icons go in (`Backup.ExplorerRestarted`) and after they are removed, and only when Explorer is the
+  once after icons are added (`Backup.ExplorerRestarted`, reset whenever new icons are added) and after they are
+  removed, and only when Explorer is the
   shell. Never tell the user to sign out or reboot for icons. All registry access in `VistaIconScheme` goes through the
   64-bit view on 64-bit Windows (`UserRoot`, `MachineRoot`, `ClassesView`), so the x86 build writes what Explorer reads.
   Retrostar's own icons use Vista's file too while the scheme is on (`ShellIcons` through `MapToVista`).

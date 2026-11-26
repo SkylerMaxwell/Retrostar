@@ -3109,6 +3109,10 @@ namespace RetroBar.Utilities
         private static readonly RegistryKey ClassesView = RegistryKey.OpenBaseKey(RegistryHive.ClassesRoot, View);
 
         private const string ClassesRoot = @"Software\Classes";
+
+        // Per-user icons of the desktop's shell objects (Recycle Bin, This PC, Network, the user's folder). Windows reads
+        // these before the classes, and Desktop Icon Settings writes them; Recycle Bin always has them on Windows 10/11.
+        private const string ExplorerRoot = @"Software\Microsoft\Windows\CurrentVersion\Explorer";
         private const string ShellIconsKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons";
         private const string LockName = "RetroBar.VistaIcons";
         private const string BackupFileName = "vista-icons-backup.json";
@@ -3133,6 +3137,8 @@ namespace RetroBar.Utilities
         /// <summary>A per-user registry value as it was before Retrostar changed it, and what Retrostar wrote.</summary>
         internal sealed class RegistryEntry
         {
+            /// <summary>The HKCU key that Key and CreatedKeys are under; null (backups made before it existed) is ClassesRoot.</summary>
+            public string Root { get; set; }
             public string Key { get; set; }
             public string Value { get; set; }
             public List<string> CreatedKeys { get; set; } = new List<string>();
@@ -3158,7 +3164,7 @@ namespace RetroBar.Utilities
             public List<FolderEntry> Folders { get; set; } = new List<FolderEntry>();
             /// <summary>The UAC prompt for the stock icons was declined; not asked again until the setting is turned on again.</summary>
             public bool ShellIconsDeclined { get; set; }
-            /// <summary>Explorer has been restarted once since the icons went in, so it shows them.</summary>
+            /// <summary>Explorer has been restarted since icons were last added, so it shows them.</summary>
             public bool ExplorerRestarted { get; set; }
         }
 
@@ -3312,6 +3318,12 @@ namespace RetroBar.Utilities
                 {
                     Backup backup = ReadBackup() ?? new Backup();
                     int added = ApplyRegistry(backup, iconFile, vistaIds) + ApplyFolders(backup, iconFile, vistaIds);
+                    if (added > 0)
+                    {
+                        // Explorer shows newly changed icons only after it restarts
+                        backup.ExplorerRestarted = false;
+                    }
+
                     WriteBackup(backup);
 
                     askForStockIcons = !backup.ShellIconsDeclined && ReadMachineBackup() == null;
@@ -3528,7 +3540,7 @@ namespace RetroBar.Utilities
             var known = new Dictionary<string, RegistryEntry>(StringComparer.OrdinalIgnoreCase);
             foreach (RegistryEntry entry in backup.Entries)
             {
-                known[entry.Key + "|" + entry.Value] = entry;
+                known[RootOf(entry) + "|" + entry.Key + "|" + entry.Value] = entry;
             }
 
             // Entries from an earlier apply follow Vista's file if Retrostar has moved
@@ -3542,11 +3554,11 @@ namespace RetroBar.Utilities
             }
 
             var planned = new List<RegistryEntry>();
-            foreach (var (key, value, id) in FindOverrides(vistaIds))
+            foreach (var (root, key, value, id) in FindOverrides(vistaIds))
             {
-                if (!known.ContainsKey(key + "|" + value))
+                if (!known.ContainsKey(root + "|" + key + "|" + value))
                 {
-                    RegistryEntry entry = Capture(key, value);
+                    RegistryEntry entry = Capture(root, key, value);
                     entry.Applied = $"{iconFile},-{id}";
                     planned.Add(entry);
                 }
@@ -3565,7 +3577,7 @@ namespace RetroBar.Utilities
             {
                 try
                 {
-                    using (RegistryKey key = UserRoot.CreateSubKey($@"{ClassesRoot}\{entry.Key}"))
+                    using (RegistryKey key = UserRoot.CreateSubKey($@"{RootOf(entry)}\{entry.Key}"))
                     {
                         key.SetValue(entry.Value, entry.Applied, RegistryValueKind.String);
                         added++;
@@ -3584,7 +3596,7 @@ namespace RetroBar.Utilities
         {
             try
             {
-                using (RegistryKey key = UserRoot.OpenSubKey($@"{ClassesRoot}\{entry.Key}", true))
+                using (RegistryKey key = UserRoot.OpenSubKey($@"{RootOf(entry)}\{entry.Key}", true))
                 {
                     string current = key?.GetValue(entry.Value, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
                     if (key == null || !string.Equals(current, entry.Applied, StringComparison.OrdinalIgnoreCase))
@@ -3608,7 +3620,7 @@ namespace RetroBar.Utilities
             {
                 try
                 {
-                    using (RegistryKey key = UserRoot.OpenSubKey($@"{ClassesRoot}\{entry.Key}", true))
+                    using (RegistryKey key = UserRoot.OpenSubKey($@"{RootOf(entry)}\{entry.Key}", true))
                     {
                         if (key == null)
                         {
@@ -3635,7 +3647,7 @@ namespace RetroBar.Utilities
                     // Keys Retrostar created go again, innermost first, if nothing else has been put in them
                     for (int i = entry.CreatedKeys.Count - 1; i >= 0; i--)
                     {
-                        string created = $@"{ClassesRoot}\{entry.CreatedKeys[i]}";
+                        string created = $@"{RootOf(entry)}\{entry.CreatedKeys[i]}";
                         bool empty;
 
                         using (RegistryKey key = UserRoot.OpenSubKey(created))
@@ -3659,13 +3671,15 @@ namespace RetroBar.Utilities
         }
 
         /// <summary>
-        /// Every DefaultIcon value Windows resolves to its own imageres.dll with an ID Vista's file also has. File types
-        /// (ProgIDs) and shell objects (CLSID) are read; extensions ("." keys) are left alone, so nothing near the
-        /// default-app associations is touched.
+        /// Every DefaultIcon value Windows resolves to its own imageres.dll with an ID Vista's file also has, with the HKCU
+        /// key it is set under. File types (ProgIDs) and shell objects (CLSID) are read from the classes, and set under
+        /// ClassesRoot; extensions ("." keys) are left alone, so nothing near the default-app associations is touched.
+        /// The desktop's shell objects also have per-user icons under ExplorerRoot, which Windows reads first: those that
+        /// exist are changed where they are. A value there that is not Windows' own icon is the user's and is kept.
         /// </summary>
-        private static List<(string key, string value, int id)> FindOverrides(HashSet<int> vistaIds)
+        private static List<(string root, string key, string value, int id)> FindOverrides(HashSet<int> vistaIds)
         {
-            var found = new List<(string, string, int)>();
+            var classes = new List<(string, string, int)>();
 
             RegistryKey root = ClassesView;
             {
@@ -3676,7 +3690,7 @@ namespace RetroBar.Utilities
                         continue;
                     }
 
-                    AddOverrides(root, $@"{name}\DefaultIcon", vistaIds, found);
+                    AddOverrides(root, $@"{name}\DefaultIcon", vistaIds, classes);
                 }
 
                 using (RegistryKey clsid = root.OpenSubKey("CLSID"))
@@ -3685,13 +3699,36 @@ namespace RetroBar.Utilities
                     {
                         foreach (string name in clsid.GetSubKeyNames())
                         {
-                            AddOverrides(root, $@"CLSID\{name}\DefaultIcon", vistaIds, found);
+                            AddOverrides(root, $@"CLSID\{name}\DefaultIcon", vistaIds, classes);
                         }
                     }
                 }
             }
 
-            return found;
+            var desktop = new List<(string, string, int)>();
+
+            try
+            {
+                using (RegistryKey explorer = UserRoot.OpenSubKey(ExplorerRoot))
+                using (RegistryKey clsid = explorer?.OpenSubKey("CLSID"))
+                {
+                    if (clsid != null)
+                    {
+                        foreach (string name in clsid.GetSubKeyNames())
+                        {
+                            AddOverrides(explorer, $@"CLSID\{name}\DefaultIcon", vistaIds, desktop);
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaIconScheme: could not read the desktop icons: {e.Message}");
+            }
+
+            return classes.Select(found => (ClassesRoot, found.Item1, found.Item2, found.Item3))
+                .Concat(desktop.Select(found => (ExplorerRoot, found.Item1, found.Item2, found.Item3)))
+                .ToList();
         }
 
         private static void AddOverrides(RegistryKey root, string path, HashSet<int> vistaIds, List<(string, string, int)> found)
@@ -3722,12 +3759,14 @@ namespace RetroBar.Utilities
             }
         }
 
-        private static RegistryEntry Capture(string key, string value)
+        private static string RootOf(RegistryEntry entry) => entry.Root ?? ClassesRoot;
+
+        private static RegistryEntry Capture(string root, string key, string value)
         {
-            var entry = new RegistryEntry { Key = key, Value = value };
+            var entry = new RegistryEntry { Root = root, Key = key, Value = value };
 
             // Keys this user does not have yet, outermost first: restoring removes them again if they are left empty
-            string path = ClassesRoot;
+            string path = root;
             bool missing = false;
 
             foreach (string part in key.Split('\\'))
@@ -3744,11 +3783,11 @@ namespace RetroBar.Utilities
 
                 if (missing)
                 {
-                    entry.CreatedKeys.Add(path.Substring(ClassesRoot.Length + 1));
+                    entry.CreatedKeys.Add(path.Substring(root.Length + 1));
                 }
             }
 
-            using (RegistryKey current = UserRoot.OpenSubKey($@"{ClassesRoot}\{key}"))
+            using (RegistryKey current = UserRoot.OpenSubKey($@"{root}\{key}"))
             {
                 if (current != null && Array.IndexOf(current.GetValueNames(), value) >= 0)
                 {
@@ -4125,7 +4164,7 @@ namespace RetroBar.Utilities
         [DllImport("user32.dll")]
         private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
 
-        /// <summary>Restarts Explorer the first time after the icons went in (each time the setting is turned on).</summary>
+        /// <summary>Restarts Explorer once after icons were added (the setting turned on, or icons found that were not changed yet).</summary>
         private static void RestartExplorerOnce()
         {
             bool restart = false;
