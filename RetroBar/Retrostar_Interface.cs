@@ -196,7 +196,8 @@ namespace RetroBar
             Settings.Instance.PropertyChanged -= Settings_PropertyChanged;
 
             // First, so that the Windows sounds return even if something below fails. The Vista icons stay: they are
-            // removed by turning their setting off or by uninstalling
+            // removed by turning their setting off or by uninstalling. Vista's folder pictures for File Explorer's
+            // larger views (VistaFolderFrames) need nothing here: their helper puts Windows' own back as this ends
             _vistaSounds.Dispose();
 
             _explorerMonitor.Dispose();

@@ -207,6 +207,15 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
      (`FolderLogoKey`): Windows 11 draws folders with content as thumbnails built from its own system file, which no
      setting redirects, so every folder is drawn from Vista's folder instead (file thumbnails stay). A Logo the user
      already has is kept; one removed by "Reset folders" is put back, recaptured, on the next apply;
+- Vista's folder in File Explorer's larger views (`VistaFolderFrames`): Windows 11 draws folders at Medium icons and
+  up from icon groups 5 (back) and 6 (front) of `C:\Windows\SystemResources\imageres.dll.mun`, which no setting
+  redirects. Only while Retrostar runs with the Vista icons on, an elevated helper (`--vista-folder-frames`, one UAC
+  prompt per start) moves Windows' file aside to `%ProgramData%\RetroBar\FolderFrames` and puts a copy in its place
+  (front = Vista's group 3, back = transparent) with Windows' exact owner and permissions (SDDL recorded first). The
+  helper waits for Retrostar to end however it ends (or the setting to turn off) and moves the very same file back;
+  the watchdog (`--vista-folder-frames-watch`) then restarts Explorer. Windows' file is never edited in place. Every
+  step is recorded in `state.json` before it happens so an interruption is repaired on the next start or by the
+  uninstaller; if Windows replaced the file meanwhile (update, SFC), Windows' file wins. Windows 11 only.
   2. the `IconResource` line of the `desktop.ini` of the user's special folders, rewritten in its own encoding with its
      attributes kept; folders under OneDrive are never touched, so nothing syncs to other PCs;
   3. Windows' stock icons in `HKLM\...\Explorer\Shell Icons`, written only by the elevated helper
@@ -346,6 +355,7 @@ Taskbar windows per screen, Explorer, the Windows Start menu, updates, clock fly
 - `RetroBar/Utilities/ClockFlyoutLauncher.cs` — opens the Windows clock and calendar flyout
 - `RetroBar/Utilities/VolumeChanger.cs` — system volume changes from the tray
 - `RetroBar/Utilities/VistaIconScheme.cs` — Windows Vista's icons until turned off or uninstalled: per-user DefaultIcon overrides, special-folder desktop.ini, and machine-wide stock icons (elevated helper `--vista-shell-icons`), all backed up and restored by `--restore-windows` (the uninstaller), both handled first in `Program.Main`
+- `RetroBar/Utilities/VistaFolderFrames.cs` — Vista's folder in File Explorer's larger views while Retrostar runs: swaps `SystemResources\imageres.dll.mun` for a patched copy through an elevated session helper (`--vista-folder-frames`) that restores it when Retrostar ends, plus the Explorer-restart watchdog (`--vista-folder-frames-watch`); both handled first in `Program.Main`; leftovers restored by `--restore-windows`
 - `RetroBar/Utilities/VistaSoundScheme.cs` — Windows Vista's sounds while Retrostar runs: points the user's sound scheme at `Resources\Sounds`, backs up and restores the original entries, and the watchdog process (`--restore-vista-sounds <pid>`, handled first in `Program.Main`)
 
 ### [1400] INPUT

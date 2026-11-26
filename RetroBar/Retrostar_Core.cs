@@ -51,6 +51,20 @@ namespace RetroBar
                 return RetroBar.Utilities.VistaIconScheme.RunElevatedHelper(args);
             }
 
+            if (args.Length >= 2 && args[0] == RetroBar.Utilities.VistaFolderFrames.HelperArgument)
+            {
+                // The elevated helper for Vista's folder in File Explorer's larger views: no window, no instance check
+                return RetroBar.Utilities.VistaFolderFrames.RunHelper(args);
+            }
+
+            if (args.Length == 3 && args[0] == RetroBar.Utilities.VistaFolderFrames.WatchArgument
+                && int.TryParse(args[1], out int framesOwnerPid) && int.TryParse(args[2], out int framesGeneration))
+            {
+                // Restarts Explorer once Windows' folder pictures are back after Retrostar ends
+                RetroBar.Utilities.VistaFolderFrames.RunWatchdog(framesOwnerPid, framesGeneration);
+                return 0;
+            }
+
             if (args.Length == 1 && args[0] == RetroBar.Utilities.VistaIconScheme.RestoreAllArgument)
             {
                 // Run by the uninstaller: everything Retrostar changed in Windows goes back as it was
@@ -3349,7 +3363,9 @@ namespace RetroBar.Utilities
                         ApplyStockIcons(iconFile);
                     }
 
-                    RestartExplorerOnce();
+                    // Vista's folder in the larger views, for this session; Explorer shows it only after a restart
+                    bool framesInPlace = VistaFolderFrames.Start(iconFile);
+                    RestartExplorerOnce(framesInPlace);
                 });
             }
             catch (Exception e)
@@ -3407,6 +3423,9 @@ namespace RetroBar.Utilities
                     }
                 }
             }
+
+            // Windows' own folder pictures for the larger views, if Vista's are in place
+            restored |= VistaFolderFrames.Stop(uninstalling);
 
             RefreshIcons(folders);
 
@@ -4203,10 +4222,13 @@ namespace RetroBar.Utilities
         [DllImport("user32.dll")]
         private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
 
-        /// <summary>Restarts Explorer once after icons were added (the setting turned on, or icons found that were not changed yet).</summary>
-        private static void RestartExplorerOnce()
+        /// <summary>
+        /// Restarts Explorer once after icons were added (the setting turned on, or icons found that were not changed yet),
+        /// or whenever forced (Vista's folder pictures went in for this session).
+        /// </summary>
+        private static void RestartExplorerOnce(bool force)
         {
-            bool restart = false;
+            bool restart = force;
 
             try
             {
@@ -4215,7 +4237,7 @@ namespace RetroBar.Utilities
                     Backup backup = ReadBackup();
 
                     // No backup: the setting was turned off meanwhile, and that restarts Explorer itself
-                    if (backup != null && !backup.ExplorerRestarted)
+                    if (backup != null && (!backup.ExplorerRestarted || force))
                     {
                         backup.ExplorerRestarted = true;
                         WriteBackup(backup);
@@ -4240,7 +4262,7 @@ namespace RetroBar.Utilities
         /// at once, with no sign-out. Retrostar's taskbar stays (it re-hides Windows' taskbar when Explorer comes back).
         /// Nothing happens when Explorer is not the shell.
         /// </summary>
-        private static void RestartExplorer()
+        internal static void RestartExplorer()
         {
             try
             {
@@ -4568,6 +4590,1097 @@ namespace RetroBar.Utilities
     }
 }
 // <RETROSTAR_SOURCE_END path="RetroBar/Utilities/VistaIconScheme.cs">
+// <RETROSTAR_SOURCE_BEGIN path="RetroBar/Utilities/VistaFolderFrames.cs">
+namespace RetroBar.Utilities
+{
+    using ManagedShell.Common.Logging;
+    using System;
+    using System.Collections.Generic;
+    using System.ComponentModel;
+    using System.Diagnostics;
+    using System.IO;
+    using System.Runtime.InteropServices;
+    using System.Security.Cryptography;
+    using System.Security.Principal;
+    using System.Text.Json;
+    using System.Threading;
+
+    /// <summary>
+    /// Vista's folder in File Explorer's larger views. Windows 11 draws a folder there (Medium icons and up) from two
+    /// pictures in its own system file, C:\Windows\SystemResources\imageres.dll.mun: icon group 5 (the back of the
+    /// folder) and 6 (the front). No setting points them elsewhere, so while Retrostar runs with the Vista icons on, that
+    /// file is swapped for a copy in which the front is Vista's folder and the back is transparent.
+    ///
+    /// The swap is done by an elevated helper (HelperArgument, one UAC prompt each time Retrostar starts) that stays
+    /// for the session and puts Windows' own file back the moment Retrostar ends, however it ends, or when the setting
+    /// is turned off. Windows' file is never edited: it is moved aside (%ProgramData%\RetroBar\FolderFrames) and the
+    /// patched copy takes its place with Windows' exact owner and permissions; restoring moves the very same file back.
+    /// A small watchdog (WatchArgument) restarts Explorer after Retrostar has ended, so Windows' folders show again.
+    /// A state file records every step first, so an interrupted session (power cut) is repaired the next time. If
+    /// Windows replaces the file itself meanwhile (an update, SFC), its new file is kept.
+    /// </summary>
+    internal static class VistaFolderFrames
+    {
+        /// <summary>Elevated helper: "--vista-folder-frames &lt;Retrostar PID&gt; &lt;generation&gt; &lt;Vista file&gt;", or "--vista-folder-frames restore".</summary>
+        public const string HelperArgument = "--vista-folder-frames";
+
+        /// <summary>Watchdog: "--vista-folder-frames-watch &lt;Retrostar PID&gt; &lt;generation&gt;".</summary>
+        public const string WatchArgument = "--vista-folder-frames-watch";
+
+        private const int BackGroup = 5;
+        private const int FrontGroup = 6;
+        private const int VistaFolderGroup = 3;
+        private const int ERROR_CANCELLED = 1223;
+        private const string LockName = "Global\\RetroBar.VistaFolderFrames";
+
+        private static readonly object _sync = new object();
+        private static Process _helper;
+        private static EventWaitHandle _stopEvent;
+        private static EventWaitHandle _revertedEvent;
+        private static int _generation;
+        private static bool _declined;
+
+        internal sealed class State
+        {
+            public string PatchedHash { get; set; }
+            public string FileSddl { get; set; }
+            public string FolderSddl { get; set; }
+        }
+
+        #region Retrostar (not elevated)
+
+        /// <summary>
+        /// Puts Vista's folder in place for this session (the Vista icons are on). Called off the UI thread: it waits for
+        /// the UAC prompt. True when the patched file went in now, so Explorer has to restart to show it.
+        /// </summary>
+        public static bool Start(string vistaFile)
+        {
+            if (!IsSupported() || string.IsNullOrEmpty(vistaFile))
+            {
+                return false;
+            }
+
+            lock (_sync)
+            {
+                if (_declined || (_helper != null && !_helper.HasExited))
+                {
+                    return false;
+                }
+
+                DisposeSession();
+                int generation = ++_generation;
+                int pid = Environment.ProcessId;
+
+                using (var applied = new EventWaitHandle(false, EventResetMode.ManualReset, EventName(pid, generation, "Applied")))
+                {
+                    _stopEvent = new EventWaitHandle(false, EventResetMode.ManualReset, EventName(pid, generation, "Stop"));
+                    _revertedEvent = new EventWaitHandle(false, EventResetMode.ManualReset, EventName(pid, generation, "Reverted"));
+
+                    try
+                    {
+                        _helper = Process.Start(new ProcessStartInfo
+                        {
+                            FileName = ExePath.GetExecutablePath(),
+                            Arguments = $"{HelperArgument} {pid} {generation} \"{vistaFile}\"",
+                            UseShellExecute = true,
+                            Verb = "runas",
+                            WindowStyle = ProcessWindowStyle.Hidden
+                        });
+                    }
+                    catch (Win32Exception e) when (e.NativeErrorCode == ERROR_CANCELLED)
+                    {
+                        // Not asked again until the setting is turned off and on
+                        ShellLogger.Info("VistaFolderFrames: administrator approval was declined");
+                        _declined = true;
+                        DisposeSession();
+                        return false;
+                    }
+                    catch (Exception e)
+                    {
+                        ShellLogger.Error($"VistaFolderFrames: the helper could not start: {e.Message}");
+                        DisposeSession();
+                        return false;
+                    }
+
+                    if (_helper == null)
+                    {
+                        DisposeSession();
+                        return false;
+                    }
+
+                    // The helper signals only once Vista's folder is in place; it ends instead if it could not be
+                    bool inPlace = false;
+                    while (!(inPlace = applied.WaitOne(500)) && !_helper.HasExited)
+                    {
+                    }
+
+                    if (!inPlace)
+                    {
+                        ShellLogger.Error("VistaFolderFrames: Vista's folder could not be put in place");
+                        DisposeSession();
+                        return false;
+                    }
+                }
+
+                StartWatchdog(generation);
+                ShellLogger.Info("VistaFolderFrames: Vista's folder is in place");
+                return true;
+            }
+        }
+
+        /// <summary>
+        /// Puts Windows' own file back (the setting turned off, or the uninstaller): the helper of this session restores it
+        /// and ends; a file left from an interrupted session is restored after one UAC prompt. True if Windows' file was
+        /// put back, so Explorer has to restart to show it.
+        /// </summary>
+        public static bool Stop(bool uninstalling)
+        {
+            lock (_sync)
+            {
+                _declined = false;
+
+                if (_helper != null && !_helper.HasExited)
+                {
+                    _stopEvent.Set();
+                    bool reverted = _revertedEvent.WaitOne(TimeSpan.FromSeconds(30));
+                    DisposeSession();
+                    return reverted;
+                }
+
+                DisposeSession();
+            }
+
+            if (ReadState() == null)
+            {
+                return false;
+            }
+
+            while (true)
+            {
+                if (RunRestore())
+                {
+                    return true;
+                }
+
+                if (!uninstalling || !AskToRetry())
+                {
+                    ShellLogger.Error("VistaFolderFrames: Windows' folder pictures were not restored (administrator approval declined)");
+                    return false;
+                }
+            }
+        }
+
+        private static bool RunRestore()
+        {
+            try
+            {
+                if (IsElevated())
+                {
+                    return Revert();
+                }
+
+                using (Process helper = Process.Start(new ProcessStartInfo
+                {
+                    FileName = ExePath.GetExecutablePath(),
+                    Arguments = $"{HelperArgument} restore",
+                    UseShellExecute = true,
+                    Verb = "runas",
+                    WindowStyle = ProcessWindowStyle.Hidden
+                }))
+                {
+                    if (helper == null)
+                    {
+                        return false;
+                    }
+
+                    helper.WaitForExit();
+                    return helper.ExitCode == 0;
+                }
+            }
+            catch (Win32Exception e) when (e.NativeErrorCode == ERROR_CANCELLED)
+            {
+                return false;
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaFolderFrames: the restore could not run: {e.Message}");
+                return false;
+            }
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int MessageBox(IntPtr owner, string text, string caption, uint type);
+
+        private static bool AskToRetry()
+        {
+            const uint MB_RETRYCANCEL = 0x5, MB_ICONWARNING = 0x30, MB_TOPMOST = 0x40000;
+            const int IDRETRY = 4;
+
+            return MessageBox(IntPtr.Zero,
+                "Retrostar needs administrator approval to put Windows' own folder pictures back in C:\\Windows\\SystemResources.\n\n" +
+                "Retry to approve it now. If you cancel, Windows' file stays replaced until Retrostar's restore runs again.",
+                "Retrostar", MB_RETRYCANCEL | MB_ICONWARNING | MB_TOPMOST) == IDRETRY;
+        }
+
+        /// <summary>Started through cmd, so ending Retrostar's process tree does not end it too.</summary>
+        private static void StartWatchdog(int generation)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c start \"\" /b \"{ExePath.GetExecutablePath()}\" {WatchArgument} {Environment.ProcessId} {generation}",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    WindowStyle = ProcessWindowStyle.Hidden
+                })?.Dispose();
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaFolderFrames: could not start the watchdog: {e.Message}");
+            }
+        }
+
+        private static void DisposeSession()
+        {
+            _helper?.Dispose();
+            _helper = null;
+            _stopEvent?.Dispose();
+            _stopEvent = null;
+            _revertedEvent?.Dispose();
+            _revertedEvent = null;
+        }
+
+        /// <summary>
+        /// Entry point of the watchdog: once the helper has put Windows' file back, Explorer is restarted so Windows'
+        /// folders show again; unless Retrostar is still running (the setting was turned off), which restarts it itself.
+        /// </summary>
+        public static void RunWatchdog(int retrostarId, int generation)
+        {
+            try
+            {
+                using (EventWaitHandle reverted = EventWaitHandle.OpenExisting(EventName(retrostarId, generation, "Reverted")))
+                {
+                    // The helper restores within moments of Retrostar ending; if it never does (it was killed too),
+                    // the next start or the uninstaller repairs it
+                    DateTime? retrostarEnded = null;
+                    while (!reverted.WaitOne(1000))
+                    {
+                        if (retrostarEnded == null && !IsRunning(retrostarId))
+                        {
+                            retrostarEnded = DateTime.UtcNow;
+                        }
+
+                        if (retrostarEnded != null && DateTime.UtcNow - retrostarEnded > TimeSpan.FromMinutes(1))
+                        {
+                            return;
+                        }
+                    }
+                }
+
+                if (!IsRunning(retrostarId))
+                {
+                    VistaIconScheme.RestartExplorer();
+                }
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaFolderFrames: watchdog failed: {e.Message}");
+            }
+        }
+
+        private static bool IsRunning(int id)
+        {
+            try
+            {
+                using (Process process = Process.GetProcessById(id))
+                {
+                    return !process.HasExited;
+                }
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        #endregion
+
+        #region Elevated helper
+
+        /// <summary>Entry point of the elevated helper. Returns the process exit code.</summary>
+        public static int RunHelper(string[] args)
+        {
+            try
+            {
+                if (args.Length == 2 && args[1] == "restore")
+                {
+                    return Revert() ? 0 : 1;
+                }
+
+                if (args.Length == 4 && int.TryParse(args[1], out int retrostarId) && int.TryParse(args[2], out int generation))
+                {
+                    return RunSession(retrostarId, generation, args[3]);
+                }
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaFolderFrames: helper failed: {e.Message}");
+            }
+
+            return 1;
+        }
+
+        private static int RunSession(int retrostarId, int generation, string vistaFile)
+        {
+            using (EventWaitHandle applied = EventWaitHandle.OpenExisting(EventName(retrostarId, generation, "Applied")))
+            using (EventWaitHandle stop = EventWaitHandle.OpenExisting(EventName(retrostarId, generation, "Stop")))
+            using (EventWaitHandle reverted = EventWaitHandle.OpenExisting(EventName(retrostarId, generation, "Reverted")))
+            using (Process retrostar = Process.GetProcessById(retrostarId))
+            {
+                bool inPlace = false;
+
+                try
+                {
+                    inPlace = Apply(vistaFile);
+                }
+                catch (Exception e)
+                {
+                    ShellLogger.Error($"VistaFolderFrames: could not put Vista's folder in place: {e.Message}");
+                }
+
+                if (!inPlace)
+                {
+                    // Whatever was begun is undone, so Windows' file is exactly as it was
+                    Revert();
+                    return 1;
+                }
+
+                applied.Set();
+
+                // Until Retrostar ends (however it ends) or the setting is turned off
+                while (!stop.WaitOne(500) && !retrostar.HasExited)
+                {
+                }
+
+                bool restored = Revert();
+                reverted.Set();
+                return restored ? 0 : 1;
+            }
+        }
+
+        /// <summary>Swaps Windows' file for the patched copy. True when the patched copy is in place.</summary>
+        private static bool Apply(string vistaFile)
+        {
+            using (var mutex = new Mutex(false, LockName))
+            {
+                mutex.WaitOne();
+
+                try
+                {
+                    string systemFile = SystemFile();
+                    State existing = ReadState();
+
+                    if (existing != null)
+                    {
+                        // Left by an interrupted session: kept if it is still in place, otherwise put back first
+                        if (File.Exists(systemFile) && File.Exists(ParkedPath()) && Hash(systemFile) == existing.PatchedHash)
+                        {
+                            return true;
+                        }
+
+                        RevertLocked();
+                    }
+
+                    if (!File.Exists(systemFile) || !File.Exists(vistaFile)
+                        || !string.Equals(Path.GetPathRoot(systemFile), Path.GetPathRoot(WorkFolder()), StringComparison.OrdinalIgnoreCase))
+                    {
+                        return false;
+                    }
+
+                    Directory.CreateDirectory(WorkFolder());
+                    DeleteLeftover(ParkedPath());
+                    DeleteLeftover(PatchedPath());
+
+                    File.Copy(systemFile, PatchedPath(), true);
+                    if (!Patch(PatchedPath(), vistaFile))
+                    {
+                        File.Delete(PatchedPath());
+                        return false;
+                    }
+
+                    // A spare copy of Windows' file, used only if the file moved aside were ever lost
+                    File.Copy(systemFile, BackupCopyPath(), true);
+
+                    EnablePrivileges();
+                    string folder = Path.GetDirectoryName(systemFile);
+                    var state = new State
+                    {
+                        PatchedHash = Hash(PatchedPath()),
+                        FileSddl = GetSecurity(systemFile, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION),
+                        FolderSddl = GetSecurity(folder, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION)
+                    };
+
+                    // Recorded before anything in Windows changes, so any interruption is undone
+                    WriteState(state);
+
+                    TakeControl(folder);
+                    try
+                    {
+                        TakeControl(systemFile);
+
+                        // Windows' file may be in use: it can still be moved, and keeps working for whoever has it open
+                        File.Move(systemFile, ParkedPath());
+                        SetSecurity(ParkedPath(), OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, state.FileSddl);
+
+                        File.Copy(PatchedPath(), systemFile);
+                        SetSecurity(systemFile, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, state.FileSddl);
+                    }
+                    finally
+                    {
+                        SetSecurity(folder, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, state.FolderSddl);
+                    }
+
+                    File.Delete(PatchedPath());
+                    return Hash(systemFile) == state.PatchedHash;
+                }
+                finally
+                {
+                    mutex.ReleaseMutex();
+                }
+            }
+        }
+
+        /// <summary>Puts Windows' own file back. True when Windows' file is in place (or nothing was changed).</summary>
+        private static bool Revert()
+        {
+            using (var mutex = new Mutex(false, LockName))
+            {
+                mutex.WaitOne();
+
+                try
+                {
+                    return RevertLocked();
+                }
+                catch (Exception e)
+                {
+                    ShellLogger.Error($"VistaFolderFrames: could not put Windows' file back: {e.Message}");
+                    return false;
+                }
+                finally
+                {
+                    mutex.ReleaseMutex();
+                }
+            }
+        }
+
+        private static bool RevertLocked()
+        {
+            State state = ReadState();
+            if (state == null)
+            {
+                return true;
+            }
+
+            EnablePrivileges();
+            string systemFile = SystemFile();
+            string folder = Path.GetDirectoryName(systemFile);
+            bool parked = File.Exists(ParkedPath());
+
+            // The patched copy may never have gone in (interrupted), or Windows may have replaced it since (an update,
+            // SFC): only Retrostar's own copy is taken out
+            bool patchedInPlace = File.Exists(systemFile) && Hash(systemFile) == state.PatchedHash;
+            bool missing = !File.Exists(systemFile);
+
+            if (patchedInPlace || missing)
+            {
+                string original = parked ? ParkedPath() : File.Exists(BackupCopyPath()) ? BackupCopyPath() : null;
+                if (original == null)
+                {
+                    ShellLogger.Error("VistaFolderFrames: Windows' file to put back was not found");
+                    return false;
+                }
+
+                TakeControl(folder);
+                try
+                {
+                    if (patchedInPlace)
+                    {
+                        TakeControl(systemFile);
+                        string removed = Path.Combine(WorkFolder(), $"imageres.dll.mun.removed-{DateTime.UtcNow.Ticks}");
+                        File.Move(systemFile, removed);
+                        DeleteLeftover(removed);
+                    }
+
+                    if (parked)
+                    {
+                        // The very file Windows had, with its own owner and permissions
+                        TakeControl(ParkedPath());
+                        File.Move(ParkedPath(), systemFile);
+                    }
+                    else
+                    {
+                        File.Copy(BackupCopyPath(), systemFile);
+                    }
+
+                    SetSecurity(systemFile, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, state.FileSddl);
+                }
+                finally
+                {
+                    SetSecurity(folder, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, state.FolderSddl);
+                }
+            }
+            else if (parked)
+            {
+                // Windows' current file is its own: the older one moved aside is no longer needed
+                TakeControl(ParkedPath());
+                DeleteLeftover(ParkedPath());
+            }
+
+            DeleteLeftover(PatchedPath());
+            DeleteLeftover(BackupCopyPath());
+            File.Delete(StatePath());
+            ShellLogger.Info("VistaFolderFrames: Windows' folder pictures are back");
+            return true;
+        }
+
+        /// <summary>Deletes a file of Retrostar's work folder; one still in use goes when Windows next starts.</summary>
+        private static void DeleteLeftover(string path)
+        {
+            if (!File.Exists(path))
+            {
+                return;
+            }
+
+            try
+            {
+                File.SetAttributes(path, FileAttributes.Normal);
+                File.Delete(path);
+            }
+            catch (Exception)
+            {
+                MoveFileEx(path, null, MOVEFILE_DELAY_UNTIL_REBOOT);
+            }
+        }
+
+        #endregion
+
+        #region Patching the copy
+
+        private static readonly IntPtr RT_ICON = (IntPtr)3;
+        private static readonly IntPtr RT_GROUP_ICON = (IntPtr)14;
+        private const uint LOAD_LIBRARY_AS_DATAFILE = 0x2;
+        private const uint LOAD_LIBRARY_AS_IMAGE_RESOURCE = 0x20;
+
+        private delegate bool EnumResNameProc(IntPtr module, IntPtr type, IntPtr name, IntPtr param);
+        private delegate bool EnumResLangProc(IntPtr module, IntPtr type, IntPtr name, ushort language, IntPtr param);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr LoadLibraryEx(string fileName, IntPtr reserved, uint flags);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool FreeLibrary(IntPtr module);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern bool EnumResourceNames(IntPtr module, IntPtr type, EnumResNameProc callback, IntPtr param);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern bool EnumResourceLanguages(IntPtr module, IntPtr type, IntPtr name, EnumResLangProc callback, IntPtr param);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr FindResourceEx(IntPtr module, IntPtr type, IntPtr name, ushort language);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LoadResource(IntPtr module, IntPtr resource);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LockResource(IntPtr data);
+
+        [DllImport("kernel32.dll")]
+        private static extern uint SizeofResource(IntPtr module, IntPtr resource);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr BeginUpdateResource(string fileName, bool deleteExisting);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool UpdateResource(IntPtr update, IntPtr type, IntPtr name, ushort language, byte[] data, uint size);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool EndUpdateResource(IntPtr update, bool discard);
+
+        /// <summary>A resource group: its language and the bytes of each icon it lists, in order.</summary>
+        private sealed class IconGroup
+        {
+            public ushort Language;
+            public byte[] Directory;
+            public List<byte[]> Images = new List<byte[]>();
+        }
+
+        /// <summary>Front (6) becomes Vista's folder, back (5) becomes transparent, in the same sizes as before.</summary>
+        private static bool Patch(string file, string vistaFile)
+        {
+            IconGroup back, front, vista;
+            int nextId;
+
+            IntPtr module = LoadLibraryEx(file, IntPtr.Zero, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+            if (module == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            try
+            {
+                back = ReadGroup(module, BackGroup, false);
+                front = ReadGroup(module, FrontGroup, false);
+                nextId = MaxIconId(module) + 1;
+            }
+            finally
+            {
+                FreeLibrary(module);
+            }
+
+            module = LoadLibraryEx(vistaFile, IntPtr.Zero, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+            if (module == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            try
+            {
+                vista = ReadGroup(module, VistaFolderGroup, true);
+            }
+            finally
+            {
+                FreeLibrary(module);
+            }
+
+            // Not Windows 11's layout (or not Vista's file): nothing is changed
+            if (back == null || front == null || vista == null || vista.Images.Count == 0 || nextId <= 0 || nextId + 64 > ushort.MaxValue)
+            {
+                return false;
+            }
+
+            var newImages = new List<(int id, ushort language, byte[] data)>();
+            byte[] frontDirectory = BuildDirectory(vista, front.Language, ref nextId, newImages);
+            byte[] backDirectory = BuildTransparentDirectory(back, ref nextId, newImages);
+
+            IntPtr update = BeginUpdateResource(file, false);
+            if (update == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            bool ok = true;
+            foreach (var (id, language, data) in newImages)
+            {
+                ok &= UpdateResource(update, RT_ICON, (IntPtr)id, language, data, (uint)data.Length);
+            }
+
+            ok &= UpdateResource(update, RT_GROUP_ICON, (IntPtr)FrontGroup, front.Language, frontDirectory, (uint)frontDirectory.Length);
+            ok &= UpdateResource(update, RT_GROUP_ICON, (IntPtr)BackGroup, back.Language, backDirectory, (uint)backDirectory.Length);
+
+            if (!EndUpdateResource(update, !ok) || !ok)
+            {
+                return false;
+            }
+
+            // The copy must read back with the new pictures
+            module = LoadLibraryEx(file, IntPtr.Zero, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+            if (module == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            try
+            {
+                IconGroup check = ReadGroup(module, FrontGroup, false);
+                return check != null && check.Images.Count == vista.Images.Count;
+            }
+            finally
+            {
+                FreeLibrary(module);
+            }
+        }
+
+        private static IconGroup ReadGroup(IntPtr module, int groupId, bool anyLanguage)
+        {
+            ushort? language = null;
+            EnumResLangProc callback = (m, t, n, lang, p) =>
+            {
+                language = lang;
+                return false; // the first is enough
+            };
+            EnumResourceLanguages(module, RT_GROUP_ICON, (IntPtr)groupId, callback, IntPtr.Zero);
+            GC.KeepAlive(callback);
+
+            if (language == null)
+            {
+                return null;
+            }
+
+            byte[] directory = ReadResource(module, RT_GROUP_ICON, groupId, language.Value);
+            if (directory == null || directory.Length < 6 || BitConverter.ToUInt16(directory, 2) != 1)
+            {
+                return null;
+            }
+
+            int count = BitConverter.ToUInt16(directory, 4);
+            if (directory.Length < 6 + count * 14)
+            {
+                return null;
+            }
+
+            var group = new IconGroup { Language = language.Value, Directory = directory };
+            for (int i = 0; i < count; i++)
+            {
+                int iconId = BitConverter.ToUInt16(directory, 6 + i * 14 + 12);
+                byte[] image = ReadResource(module, RT_ICON, iconId, language.Value);
+
+                if (image == null && anyLanguage)
+                {
+                    image = ReadResourceAnyLanguage(module, RT_ICON, iconId);
+                }
+
+                if (image == null)
+                {
+                    return null;
+                }
+
+                group.Images.Add(image);
+            }
+
+            return group;
+        }
+
+        private static byte[] ReadResourceAnyLanguage(IntPtr module, IntPtr type, int id)
+        {
+            ushort? language = null;
+            EnumResLangProc callback = (m, t, n, lang, p) =>
+            {
+                language = lang;
+                return false;
+            };
+            EnumResourceLanguages(module, type, (IntPtr)id, callback, IntPtr.Zero);
+            GC.KeepAlive(callback);
+
+            return language == null ? null : ReadResource(module, type, id, language.Value);
+        }
+
+        private static byte[] ReadResource(IntPtr module, IntPtr type, int id, ushort language)
+        {
+            IntPtr resource = FindResourceEx(module, type, (IntPtr)id, language);
+            if (resource == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            uint size = SizeofResource(module, resource);
+            IntPtr data = LockResource(LoadResource(module, resource));
+            if (data == IntPtr.Zero || size == 0)
+            {
+                return null;
+            }
+
+            byte[] bytes = new byte[size];
+            Marshal.Copy(data, bytes, 0, (int)size);
+            return bytes;
+        }
+
+        private static int MaxIconId(IntPtr module)
+        {
+            int max = -1;
+            EnumResNameProc callback = (m, t, name, p) =>
+            {
+                long value = name.ToInt64();
+                if ((value >> 16) == 0)
+                {
+                    max = Math.Max(max, (int)value);
+                }
+
+                return true;
+            };
+            EnumResourceNames(module, RT_ICON, callback, IntPtr.Zero);
+            GC.KeepAlive(callback);
+            return max;
+        }
+
+        /// <summary>A group directory listing the given group's pictures under new icon IDs.</summary>
+        private static byte[] BuildDirectory(IconGroup source, ushort language, ref int nextId, List<(int, ushort, byte[])> newImages)
+        {
+            byte[] directory = (byte[])source.Directory.Clone();
+            int count = BitConverter.ToUInt16(directory, 4);
+            Array.Resize(ref directory, 6 + count * 14);
+
+            for (int i = 0; i < count; i++)
+            {
+                int id = nextId++;
+                byte[] image = source.Images[i];
+                BitConverter.GetBytes((uint)image.Length).CopyTo(directory, 6 + i * 14 + 8);
+                BitConverter.GetBytes((ushort)id).CopyTo(directory, 6 + i * 14 + 12);
+                newImages.Add((id, language, image));
+            }
+
+            return directory;
+        }
+
+        /// <summary>A group directory of fully transparent pictures, one per size the given group has.</summary>
+        private static byte[] BuildTransparentDirectory(IconGroup source, ref int nextId, List<(int, ushort, byte[])> newImages)
+        {
+            byte[] directory = (byte[])source.Directory.Clone();
+            int count = BitConverter.ToUInt16(directory, 4);
+            Array.Resize(ref directory, 6 + count * 14);
+
+            for (int i = 0; i < count; i++)
+            {
+                int offset = 6 + i * 14;
+                int width = directory[offset] == 0 ? 256 : directory[offset];
+                int height = directory[offset + 1] == 0 ? 256 : directory[offset + 1];
+                byte[] image = TransparentImage(width, height);
+                int id = nextId++;
+
+                directory[offset + 2] = 0; // colour count
+                directory[offset + 3] = 0;
+                BitConverter.GetBytes((ushort)1).CopyTo(directory, offset + 4);  // planes
+                BitConverter.GetBytes((ushort)32).CopyTo(directory, offset + 6); // bits per pixel
+                BitConverter.GetBytes((uint)image.Length).CopyTo(directory, offset + 8);
+                BitConverter.GetBytes((ushort)id).CopyTo(directory, offset + 12);
+                newImages.Add((id, source.Language, image));
+            }
+
+            return directory;
+        }
+
+        /// <summary>A 32-bit icon picture with every pixel fully transparent.</summary>
+        private static byte[] TransparentImage(int width, int height)
+        {
+            int maskStride = (width + 31) / 32 * 4;
+            int pixels = width * height * 4;
+            byte[] image = new byte[40 + pixels + maskStride * height];
+
+            BitConverter.GetBytes(40).CopyTo(image, 0);                       // header size
+            BitConverter.GetBytes(width).CopyTo(image, 4);
+            BitConverter.GetBytes(height * 2).CopyTo(image, 8);               // colour and mask
+            BitConverter.GetBytes((ushort)1).CopyTo(image, 12);               // planes
+            BitConverter.GetBytes((ushort)32).CopyTo(image, 14);              // bits per pixel
+            BitConverter.GetBytes(pixels + maskStride * height).CopyTo(image, 20);
+
+            // Colour: all zero (alpha 0). Mask: all set (transparent)
+            for (int i = 40 + pixels; i < image.Length; i++)
+            {
+                image[i] = 0xFF;
+            }
+
+            return image;
+        }
+
+        #endregion
+
+        #region Ownership and permissions
+
+        private const uint OWNER_SECURITY_INFORMATION = 0x1;
+        private const uint DACL_SECURITY_INFORMATION = 0x4;
+        private const uint SDDL_REVISION_1 = 1;
+        private const uint MOVEFILE_DELAY_UNTIL_REBOOT = 0x4;
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool GetFileSecurity(string fileName, uint information, byte[] descriptor, uint length, out uint needed);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool SetFileSecurity(string fileName, uint information, IntPtr descriptor);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool ConvertSecurityDescriptorToStringSecurityDescriptor(byte[] descriptor, uint revision, uint information, out IntPtr text, out uint length);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string text, uint revision, out IntPtr descriptor, IntPtr length);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LocalFree(IntPtr memory);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool MoveFileEx(string existing, string newName, uint flags);
+
+        // TOKEN_PRIVILEGES with one LUID_AND_ATTRIBUTES: the LUID is 4-byte aligned, hence Pack = 4
+        [StructLayout(LayoutKind.Sequential, Pack = 4)]
+        private struct TokenPrivilege
+        {
+            public uint Count;
+            public long Luid;
+            public uint Attributes;
+        }
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+
+        [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool LookupPrivilegeValue(string system, string name, out long luid);
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        private static extern bool AdjustTokenPrivileges(IntPtr token, bool disableAll, ref TokenPrivilege state, uint length, IntPtr previous, IntPtr returned);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetCurrentProcess();
+
+        [DllImport("kernel32.dll")]
+        private static extern bool CloseHandle(IntPtr handle);
+
+        /// <summary>Taking ownership, and giving a file back to its owner (TrustedInstaller), need these.</summary>
+        private static void EnablePrivileges()
+        {
+            const uint TOKEN_ADJUST_PRIVILEGES = 0x20, TOKEN_QUERY = 0x8, SE_PRIVILEGE_ENABLED = 0x2;
+            const int ERROR_NOT_ALL_ASSIGNED = 1300;
+
+            if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, out IntPtr token))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+
+            try
+            {
+                foreach (string name in new[] { "SeTakeOwnershipPrivilege", "SeRestorePrivilege", "SeBackupPrivilege" })
+                {
+                    if (!LookupPrivilegeValue(null, name, out long luid))
+                    {
+                        throw new Win32Exception(Marshal.GetLastWin32Error());
+                    }
+
+                    var privilege = new TokenPrivilege { Count = 1, Luid = luid, Attributes = SE_PRIVILEGE_ENABLED };
+                    if (!AdjustTokenPrivileges(token, false, ref privilege, 0, IntPtr.Zero, IntPtr.Zero)
+                        || Marshal.GetLastWin32Error() == ERROR_NOT_ALL_ASSIGNED)
+                    {
+                        throw new Win32Exception($"{name} is not available");
+                    }
+                }
+            }
+            finally
+            {
+                CloseHandle(token);
+            }
+        }
+
+        /// <summary>Owner and permissions of a file or folder, as SDDL text.</summary>
+        private static string GetSecurity(string path, uint information)
+        {
+            GetFileSecurity(path, information, null, 0, out uint needed);
+            byte[] descriptor = new byte[needed];
+
+            if (needed == 0 || !GetFileSecurity(path, information, descriptor, needed, out _)
+                || !ConvertSecurityDescriptorToStringSecurityDescriptor(descriptor, SDDL_REVISION_1, information, out IntPtr text, out _))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), $"could not read the permissions of {path}");
+            }
+
+            try
+            {
+                return Marshal.PtrToStringUni(text);
+            }
+            finally
+            {
+                LocalFree(text);
+            }
+        }
+
+        private static void SetSecurity(string path, uint information, string sddl)
+        {
+            if (!ConvertStringSecurityDescriptorToSecurityDescriptor(sddl, SDDL_REVISION_1, out IntPtr descriptor, IntPtr.Zero))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+
+            try
+            {
+                if (!SetFileSecurity(path, information, descriptor))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), $"could not set the permissions of {path}");
+                }
+            }
+            finally
+            {
+                LocalFree(descriptor);
+            }
+        }
+
+        /// <summary>
+        /// Administrators become the owner and get full control of this one file or folder (nothing inherits it), so it
+        /// can be moved; the caller puts the recorded owner and permissions back afterwards.
+        /// </summary>
+        private static void TakeControl(string path)
+        {
+            SetSecurity(path, OWNER_SECURITY_INFORMATION, "O:BA");
+
+            string dacl = GetSecurity(path, DACL_SECURITY_INFORMATION);
+            int firstEntry = dacl.IndexOf('(');
+            string withAdministrators = firstEntry < 0 ? dacl + "(A;;FA;;;BA)" : dacl.Insert(firstEntry, "(A;;FA;;;BA)");
+            SetSecurity(path, DACL_SECURITY_INFORMATION, withAdministrators);
+        }
+
+        #endregion
+
+        #region Files
+
+        /// <summary>Windows 11 (build 22000 and later) draws folders from these two pictures; earlier Windows does not.</summary>
+        private static bool IsSupported() => Environment.OSVersion.Version.Build >= 22000 && File.Exists(SystemFile());
+
+        private static string SystemFile() =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "SystemResources", "imageres.dll.mun");
+
+        private static string WorkFolder() =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RetroBar", "FolderFrames");
+
+        private static string StatePath() => Path.Combine(WorkFolder(), "state.json");
+
+        /// <summary>Windows' own file, moved here while the patched copy is in its place.</summary>
+        private static string ParkedPath() => Path.Combine(WorkFolder(), "imageres.dll.mun.windows");
+
+        private static string PatchedPath() => Path.Combine(WorkFolder(), "imageres.dll.mun.patched");
+
+        private static string BackupCopyPath() => Path.Combine(WorkFolder(), "imageres.dll.mun.spare");
+
+        private static string EventName(int retrostarId, int generation, string name) =>
+            $"Local\\RetroBar.VistaFolderFrames.{retrostarId}.{generation}.{name}";
+
+        private static State ReadState()
+        {
+            try
+            {
+                return File.Exists(StatePath()) ? JsonSerializer.Deserialize<State>(File.ReadAllText(StatePath())) : null;
+            }
+            catch (Exception e)
+            {
+                ShellLogger.Error($"VistaFolderFrames: could not read the state: {e.Message}");
+                return null;
+            }
+        }
+
+        private static void WriteState(State state)
+        {
+            string temporary = StatePath() + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(temporary, StatePath(), true);
+        }
+
+        private static string Hash(string path)
+        {
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (SHA256 sha = SHA256.Create())
+            {
+                return Convert.ToHexString(sha.ComputeHash(stream));
+            }
+        }
+
+        private static bool IsElevated()
+        {
+            using (WindowsIdentity identity = WindowsIdentity.GetCurrent())
+            {
+                return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+            }
+        }
+
+        #endregion
+    }
+}
+// <RETROSTAR_SOURCE_END path="RetroBar/Utilities/VistaFolderFrames.cs">
 
 // [1400] INPUT :: hotkeys, tray hotkeys, low-level mouse hook, delayed activation
 
