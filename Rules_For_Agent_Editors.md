@@ -230,7 +230,9 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
   Retrostar's value; remove keys Retrostar created when they are left empty; follow Vista's file if the install folder
   moves; refresh Windows' icons (`SHChangeNotify`, `ie4uinit -show`) after every change; read Vista's file only as data.
   Explorer reads the stock icons only at start-up, so it is restarted (`RestartExplorer`: Task Manager's exit message
-  to Explorer's own `Shell_TrayWnd`, never Retrostar's; icon and thumbnail caches cleared; started again only if Windows does not)
+  to Explorer's own `Shell_TrayWnd`, never Retrostar's; then every other `explorer.exe` of the session is ended, because
+  File Explorer windows can run in their own Explorer process that keeps the caches open; then the icon and thumbnail
+  caches are deleted (retried, else renamed aside) and anything that stays is reported with its holder (Restart Manager); started again only if Windows does not)
   once after icons are added (`Backup.ExplorerRestarted`, reset whenever new icons are added) and after they are
   removed, and only when Explorer is the
   shell. Never tell the user to sign out or reboot for icons. All registry access in `VistaIconScheme` goes through the

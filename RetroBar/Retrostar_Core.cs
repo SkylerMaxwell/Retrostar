@@ -3365,7 +3365,13 @@ namespace RetroBar.Utilities
 
                     // Vista's folder in the larger views, for this session; Explorer shows it only after a restart
                     bool framesInPlace = VistaFolderFrames.Start(iconFile);
-                    RestartExplorerOnce(framesInPlace);
+                    string problem = RestartExplorerOnce(framesInPlace);
+
+                    if (framesInPlace && problem != null)
+                    {
+                        // Folders keep the pictures Windows stored before: say why, rather than look as if nothing happened
+                        VistaFolderFrames.ReportStaleCache(problem);
+                    }
                 });
             }
             catch (Exception e)
@@ -4226,7 +4232,7 @@ namespace RetroBar.Utilities
         /// Restarts Explorer once after icons were added (the setting turned on, or icons found that were not changed yet),
         /// or whenever forced (Vista's folder pictures went in for this session).
         /// </summary>
-        private static void RestartExplorerOnce(bool force)
+        private static string RestartExplorerOnce(bool force)
         {
             bool restart = force;
 
@@ -4250,26 +4256,26 @@ namespace RetroBar.Utilities
                 ShellLogger.Error($"VistaIconScheme: could not read the backup: {e.Message}");
             }
 
-            if (restart)
-            {
-                RestartExplorer();
-            }
+            return restart ? RestartExplorer() : null;
         }
 
         /// <summary>
-        /// Explorer reads the stock icons only when it starts and keeps every icon it has drawn, so after the icons change
-        /// it is restarted, as Task Manager's "Restart" does, with its icon cache cleared: the new icons show everywhere
-        /// at once, with no sign-out. Retrostar's taskbar stays (it re-hides Windows' taskbar when Explorer comes back).
-        /// Nothing happens when Explorer is not the shell.
+        /// Explorer reads the stock icons only when it starts, and keeps every icon and folder picture it has drawn in its
+        /// caches (iconcache_*.db, thumbcache_*.db), so after the icons change it is restarted with those caches deleted:
+        /// the documented reset. Every Explorer process of this session has to be gone first, because File Explorer's
+        /// windows can run in an Explorer process of their own that keeps the caches open; the shell is asked to exit as
+        /// Task Manager's "Restart" does, the others are ended. Retrostar's taskbar stays (it re-hides Windows' taskbar
+        /// when Explorer comes back). Nothing happens when Explorer is not the shell.
+        /// Returns null when the caches were cleared, otherwise which cache files stayed and which programs hold them.
         /// </summary>
-        internal static void RestartExplorer()
+        internal static string RestartExplorer()
         {
             try
             {
                 Process shell = ExplorerShellProcess();
                 if (shell == null)
                 {
-                    return;
+                    return null;
                 }
 
                 using (shell)
@@ -4293,7 +4299,8 @@ namespace RetroBar.Utilities
                     }
                 }
 
-                ClearIconCache();
+                EndOtherExplorers();
+                string problem = ClearShellCaches();
 
                 // Windows may start the shell again by itself; otherwise it is started here
                 for (int waited = 0; waited < 2000 && GetShellWindow() == IntPtr.Zero; waited += 100)
@@ -4307,11 +4314,46 @@ namespace RetroBar.Utilities
                     Process.Start(new ProcessStartInfo(explorer) { UseShellExecute = false })?.Dispose();
                 }
 
-                ShellLogger.Info("VistaIconScheme: Explorer restarted to show the icons");
+                if (problem == null)
+                {
+                    ShellLogger.Info("VistaIconScheme: Explorer restarted with its icon and thumbnail caches cleared");
+                }
+                else
+                {
+                    ShellLogger.Warning($"VistaIconScheme: Explorer restarted, but {problem}");
+                }
+
+                return problem;
             }
             catch (Exception e)
             {
                 ShellLogger.Error($"VistaIconScheme: could not restart Explorer: {e.Message}");
+                return $"Explorer could not be restarted: {e.Message}";
+            }
+        }
+
+        /// <summary>Ends the Explorer processes of this session that are left once the shell has exited (File Explorer windows).</summary>
+        private static void EndOtherExplorers()
+        {
+            int session = Process.GetCurrentProcess().SessionId;
+
+            foreach (Process explorer in Process.GetProcessesByName("explorer"))
+            {
+                using (explorer)
+                {
+                    try
+                    {
+                        if (explorer.SessionId == session && !explorer.HasExited)
+                        {
+                            explorer.Kill();
+                            explorer.WaitForExit(5000);
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        ShellLogger.Warning($"VistaIconScheme: could not end Explorer process {explorer.Id}: {e.Message}");
+                    }
+                }
             }
         }
 
@@ -4334,8 +4376,12 @@ namespace RetroBar.Utilities
             return null;
         }
 
-        /// <summary>Deletes Windows' per-user icon and thumbnail caches, which it rebuilds by itself; a file in use is left.</summary>
-        private static void ClearIconCache()
+        /// <summary>
+        /// Deletes Windows' per-user icon and thumbnail caches, which Windows rebuilds by itself. A file still held is tried
+        /// again for a few seconds, then renamed out of the way (a new one is made in its place; the renamed one goes when
+        /// Windows next starts). Returns null when every cache is gone, otherwise which files stayed and who holds them.
+        /// </summary>
+        private static string ClearShellCaches()
         {
             string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             var files = new List<string> { Path.Combine(local, "IconCache.db") };
@@ -4344,25 +4390,140 @@ namespace RetroBar.Utilities
             if (Directory.Exists(explorerFolder))
             {
                 files.AddRange(Directory.GetFiles(explorerFolder, "iconcache_*.db"));
-
-                // Folder thumbnails already drawn are kept here: cleared so folders change to and from Vista's folder
                 files.AddRange(Directory.GetFiles(explorerFolder, "thumbcache_*.db"));
             }
 
-            foreach (string file in files)
+            var stayed = new List<string>();
+
+            foreach (string file in files.Where(File.Exists))
+            {
+                if (!RemoveCacheFile(file))
+                {
+                    stayed.Add(file);
+                }
+            }
+
+            if (stayed.Count == 0)
+            {
+                return null;
+            }
+
+            string holders = string.Join(", ", ProcessesHolding(stayed));
+            return $"{string.Join(", ", stayed.Select(Path.GetFileName))} could not be cleared" +
+                (holders.Length > 0 ? $" (held by {holders})" : "");
+        }
+
+        private static bool RemoveCacheFile(string file)
+        {
+            for (int attempt = 0; attempt < 15; attempt++)
             {
                 try
                 {
-                    if (File.Exists(file))
-                    {
-                        File.Delete(file);
-                    }
+                    File.SetAttributes(file, FileAttributes.Normal);
+                    File.Delete(file);
+                    return true;
                 }
                 catch (Exception)
                 {
-                    // In use by another program: Windows refreshes it as icons are drawn again
+                    Thread.Sleep(200);
                 }
             }
+
+            try
+            {
+                string stale = $"{file}.retrostar-stale-{DateTime.UtcNow.Ticks}";
+                File.Move(file, stale);
+                MoveFileEx(stale, null, MOVEFILE_DELAY_UNTIL_REBOOT);
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RM_UNIQUE_PROCESS
+        {
+            public int dwProcessId;
+            public System.Runtime.InteropServices.ComTypes.FILETIME ProcessStartTime;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct RM_PROCESS_INFO
+        {
+            public RM_UNIQUE_PROCESS Process;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+            public string strAppName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
+            public string strServiceShortName;
+            public int ApplicationType;
+            public uint AppStatus;
+            public uint TSSessionId;
+            [MarshalAs(UnmanagedType.Bool)]
+            public bool bRestartable;
+        }
+
+        [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+        private static extern int RmStartSession(out uint session, int flags, StringBuilder key);
+
+        [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
+        private static extern int RmRegisterResources(uint session, uint fileCount, string[] files, uint applicationCount, IntPtr applications, uint serviceCount, string[] services);
+
+        [DllImport("rstrtmgr.dll")]
+        private static extern int RmGetList(uint session, out uint needed, ref uint count, [In, Out] RM_PROCESS_INFO[] processes, ref uint rebootReasons);
+
+        [DllImport("rstrtmgr.dll")]
+        private static extern int RmEndSession(uint session);
+
+        /// <summary>The programs holding the given files open (Windows' Restart Manager), as "name (PID)".</summary>
+        private static List<string> ProcessesHolding(List<string> files)
+        {
+            var holders = new List<string>();
+
+            try
+            {
+                if (RmStartSession(out uint session, 0, new StringBuilder(33)) != 0)
+                {
+                    return holders;
+                }
+
+                try
+                {
+                    if (RmRegisterResources(session, (uint)files.Count, files.ToArray(), 0, IntPtr.Zero, 0, null) != 0)
+                    {
+                        return holders;
+                    }
+
+                    uint count = 0, reasons = 0;
+                    const int ERROR_MORE_DATA = 234;
+                    int result = RmGetList(session, out uint needed, ref count, null, ref reasons);
+
+                    if (result == ERROR_MORE_DATA && needed > 0)
+                    {
+                        var processes = new RM_PROCESS_INFO[needed];
+                        count = needed;
+
+                        if (RmGetList(session, out needed, ref count, processes, ref reasons) == 0)
+                        {
+                            for (int i = 0; i < count; i++)
+                            {
+                                holders.Add($"{processes[i].strAppName} ({processes[i].Process.dwProcessId})");
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    RmEndSession(session);
+                }
+            }
+            catch (Exception)
+            {
+                // Only for reporting
+            }
+
+            return holders;
         }
 
         #endregion
@@ -4812,6 +4973,17 @@ namespace RetroBar.Utilities
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern int MessageBox(IntPtr owner, string text, string caption, uint type);
+
+        /// <summary>Vista's folder is in place, but Windows' stored folder pictures could not all be cleared.</summary>
+        public static void ReportStaleCache(string problem)
+        {
+            const uint MB_OK = 0x0, MB_ICONWARNING = 0x30, MB_TOPMOST = 0x40000;
+
+            MessageBox(IntPtr.Zero,
+                "Vista's folder is in place, but Windows kept some of the folder pictures it had already stored, so those " +
+                "folders still look like Windows 11:\n\n" + problem + "\n\nClose the programs named above and restart Retrostar.",
+                "Retrostar", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+        }
 
         /// <summary>Says why Vista's folder could not go in, once per session, instead of failing silently.</summary>
         private static void ShowFailure(string reason)
