@@ -4716,7 +4716,9 @@ namespace RetroBar.Utilities
 
                     if (!inPlace)
                     {
-                        ShellLogger.Error("VistaFolderFrames: Vista's folder could not be put in place");
+                        string reason = LastFailure() ?? "the helper ended without a reason";
+                        ShellLogger.Error($"VistaFolderFrames: Vista's folder could not be put in place: {reason}");
+                        ShowFailure(reason);
                         DisposeSession();
                         return false;
                     }
@@ -4810,6 +4812,17 @@ namespace RetroBar.Utilities
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern int MessageBox(IntPtr owner, string text, string caption, uint type);
+
+        /// <summary>Says why Vista's folder could not go in, once per session, instead of failing silently.</summary>
+        private static void ShowFailure(string reason)
+        {
+            const uint MB_OK = 0x0, MB_ICONWARNING = 0x30, MB_TOPMOST = 0x40000;
+
+            MessageBox(IntPtr.Zero,
+                "Retrostar could not put Vista's folder in File Explorer's larger views. Windows' own file is unchanged.\n\n" +
+                reason + "\n\nThe full log is " + LogPath(),
+                "Retrostar", MB_OK | MB_ICONWARNING | MB_TOPMOST);
+        }
 
         private static bool AskToRetry()
         {
@@ -4940,6 +4953,7 @@ namespace RetroBar.Utilities
             using (Process retrostar = Process.GetProcessById(retrostarId))
             {
                 bool inPlace = false;
+                StartLog();
 
                 try
                 {
@@ -4947,7 +4961,7 @@ namespace RetroBar.Utilities
                 }
                 catch (Exception e)
                 {
-                    ShellLogger.Error($"VistaFolderFrames: could not put Vista's folder in place: {e.Message}");
+                    Log($"FAILED: {e.Message}");
                 }
 
                 if (!inPlace)
@@ -4964,7 +4978,9 @@ namespace RetroBar.Utilities
                 {
                 }
 
+                Log("Retrostar ended or the setting was turned off: putting Windows' file back");
                 bool restored = Revert();
+                Log(restored ? "Windows' file is back" : "FAILED to put Windows' file back");
                 reverted.Set();
                 return restored ? 0 : 1;
             }
@@ -4993,26 +5009,43 @@ namespace RetroBar.Utilities
                         RevertLocked();
                     }
 
-                    if (!File.Exists(systemFile) || !File.Exists(vistaFile)
-                        || !string.Equals(Path.GetPathRoot(systemFile), Path.GetPathRoot(WorkFolder()), StringComparison.OrdinalIgnoreCase))
+                    if (!File.Exists(systemFile))
                     {
-                        return false;
+                        throw new FileNotFoundException("Windows' file was not found", systemFile);
+                    }
+
+                    if (!File.Exists(vistaFile))
+                    {
+                        throw new FileNotFoundException("Vista's file was not found", vistaFile);
+                    }
+
+                    if (!string.Equals(Path.GetPathRoot(systemFile), Path.GetPathRoot(WorkFolder()), StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException("Windows and ProgramData are on different drives");
                     }
 
                     Directory.CreateDirectory(WorkFolder());
                     DeleteLeftover(ParkedPath());
                     DeleteLeftover(PatchedPath());
 
+                    Log("copying Windows' file");
                     File.Copy(systemFile, PatchedPath(), true);
-                    if (!Patch(PatchedPath(), vistaFile))
+
+                    Log("patching the copy");
+                    try
                     {
-                        File.Delete(PatchedPath());
-                        return false;
+                        Patch(PatchedPath(), vistaFile);
+                    }
+                    catch (Exception)
+                    {
+                        DeleteLeftover(PatchedPath());
+                        throw;
                     }
 
                     // A spare copy of Windows' file, used only if the file moved aside were ever lost
                     File.Copy(systemFile, BackupCopyPath(), true);
 
+                    Log("enabling ownership privileges");
                     EnablePrivileges();
                     string folder = Path.GetDirectoryName(systemFile);
                     var state = new State
@@ -5025,15 +5058,18 @@ namespace RetroBar.Utilities
                     // Recorded before anything in Windows changes, so any interruption is undone
                     WriteState(state);
 
+                    Log("taking control of SystemResources");
                     TakeControl(folder);
                     try
                     {
                         TakeControl(systemFile);
 
                         // Windows' file may be in use: it can still be moved, and keeps working for whoever has it open
-                        File.Move(systemFile, ParkedPath());
+                        Log("moving Windows' file aside");
+                        MoveWithRetry(systemFile, ParkedPath());
                         SetSecurity(ParkedPath(), OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, state.FileSddl);
 
+                        Log("putting the patched copy in place");
                         File.Copy(PatchedPath(), systemFile);
                         SetSecurity(systemFile, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, state.FileSddl);
                     }
@@ -5042,8 +5078,15 @@ namespace RetroBar.Utilities
                         SetSecurity(folder, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, state.FolderSddl);
                     }
 
-                    File.Delete(PatchedPath());
-                    return Hash(systemFile) == state.PatchedHash;
+                    DeleteLeftover(PatchedPath());
+
+                    if (Hash(systemFile) != state.PatchedHash)
+                    {
+                        throw new InvalidOperationException("the file in SystemResources is not the patched copy");
+                    }
+
+                    Log("Vista's folder is in place");
+                    return true;
                 }
                 finally
                 {
@@ -5065,6 +5108,7 @@ namespace RetroBar.Utilities
                 }
                 catch (Exception e)
                 {
+                    Log($"FAILED to put Windows' file back: {e.Message}");
                     ShellLogger.Error($"VistaFolderFrames: could not put Windows' file back: {e.Message}");
                     return false;
                 }
@@ -5109,7 +5153,7 @@ namespace RetroBar.Utilities
                     {
                         TakeControl(systemFile);
                         string removed = Path.Combine(WorkFolder(), $"imageres.dll.mun.removed-{DateTime.UtcNow.Ticks}");
-                        File.Move(systemFile, removed);
+                        MoveWithRetry(systemFile, removed);
                         DeleteLeftover(removed);
                     }
 
@@ -5117,7 +5161,7 @@ namespace RetroBar.Utilities
                     {
                         // The very file Windows had, with its own owner and permissions
                         TakeControl(ParkedPath());
-                        File.Move(ParkedPath(), systemFile);
+                        MoveWithRetry(ParkedPath(), systemFile);
                     }
                     else
                     {
@@ -5143,6 +5187,76 @@ namespace RetroBar.Utilities
             File.Delete(StatePath());
             ShellLogger.Info("VistaFolderFrames: Windows' folder pictures are back");
             return true;
+        }
+
+        /// <summary>A move (rename) on the same drive, tried again for a few seconds while Windows briefly holds the file.</summary>
+        private static void MoveWithRetry(string from, string to)
+        {
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    File.Move(from, to);
+                    return;
+                }
+                catch (IOException) when (attempt < 20)
+                {
+                    Thread.Sleep(250);
+                }
+                catch (UnauthorizedAccessException) when (attempt < 20)
+                {
+                    Thread.Sleep(250);
+                }
+            }
+        }
+
+        /// <summary>Starts the helper's step log (LogPath), which Retrostar shows if Vista's folder could not go in.</summary>
+        private static void StartLog()
+        {
+            try
+            {
+                Directory.CreateDirectory(WorkFolder());
+                File.WriteAllText(LogPath(), $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} Windows {Environment.OSVersion.Version}{Environment.NewLine}");
+            }
+            catch (Exception)
+            {
+                // The log is only for reporting
+            }
+        }
+
+        private static void Log(string line)
+        {
+            try
+            {
+                File.AppendAllText(LogPath(), $"{DateTime.Now:HH:mm:ss} {line}{Environment.NewLine}");
+            }
+            catch (Exception)
+            {
+                // The log is only for reporting
+            }
+        }
+
+        /// <summary>The reason the helper last stopped, from its log; null if it did not fail.</summary>
+        private static string LastFailure()
+        {
+            try
+            {
+                string[] lines = File.Exists(LogPath()) ? File.ReadAllLines(LogPath()) : Array.Empty<string>();
+                for (int i = lines.Length - 1; i >= 0; i--)
+                {
+                    int at = lines[i].IndexOf("FAILED", StringComparison.Ordinal);
+                    if (at >= 0)
+                    {
+                        string step = i > 0 ? lines[i - 1].Substring(Math.Min(9, lines[i - 1].Length)) : "";
+                        return $"{lines[i].Substring(at)} (at: {step})";
+                    }
+                }
+            }
+            catch (Exception)
+            {
+            }
+
+            return null;
         }
 
         /// <summary>Deletes a file of Retrostar's work folder; one still in use goes when Windows next starts.</summary>
@@ -5217,8 +5331,11 @@ namespace RetroBar.Utilities
             public List<byte[]> Images = new List<byte[]>();
         }
 
-        /// <summary>Front (6) becomes Vista's folder, back (5) becomes transparent, in the same sizes as before.</summary>
-        private static bool Patch(string file, string vistaFile)
+        /// <summary>
+        /// Front (6) becomes Vista's folder, back (5) becomes transparent, in the same sizes as before. Throws with the
+        /// reason if the copy cannot be patched.
+        /// </summary>
+        private static void Patch(string file, string vistaFile)
         {
             IconGroup back, front, vista;
             int nextId;
@@ -5226,13 +5343,13 @@ namespace RetroBar.Utilities
             IntPtr module = LoadLibraryEx(file, IntPtr.Zero, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
             if (module == IntPtr.Zero)
             {
-                return false;
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Windows' file could not be read as resources");
             }
 
             try
             {
-                back = ReadGroup(module, BackGroup, false);
-                front = ReadGroup(module, FrontGroup, false);
+                back = ReadGroup(module, BackGroup);
+                front = ReadGroup(module, FrontGroup);
                 nextId = MaxIconId(module) + 1;
             }
             finally
@@ -5243,12 +5360,12 @@ namespace RetroBar.Utilities
             module = LoadLibraryEx(vistaFile, IntPtr.Zero, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
             if (module == IntPtr.Zero)
             {
-                return false;
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Vista's file could not be read");
             }
 
             try
             {
-                vista = ReadGroup(module, VistaFolderGroup, true);
+                vista = ReadGroup(module, VistaFolderGroup);
             }
             finally
             {
@@ -5256,9 +5373,19 @@ namespace RetroBar.Utilities
             }
 
             // Not Windows 11's layout (or not Vista's file): nothing is changed
-            if (back == null || front == null || vista == null || vista.Images.Count == 0 || nextId <= 0 || nextId + 64 > ushort.MaxValue)
+            if (back == null || front == null)
             {
-                return false;
+                throw new InvalidOperationException("Windows' file has no folder pictures (icon groups 5 and 6)");
+            }
+
+            if (vista == null || vista.Images.Count == 0)
+            {
+                throw new InvalidOperationException("Vista's folder (icon group 3) could not be read");
+            }
+
+            if (nextId <= 0 || nextId + 64 > ushort.MaxValue)
+            {
+                throw new InvalidOperationException("no free icon IDs in Windows' file");
             }
 
             var newImages = new List<(int id, ushort language, byte[] data)>();
@@ -5268,34 +5395,53 @@ namespace RetroBar.Utilities
             IntPtr update = BeginUpdateResource(file, false);
             if (update == IntPtr.Zero)
             {
-                return false;
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "the copy could not be opened for patching");
             }
 
-            bool ok = true;
+            int error = 0;
             foreach (var (id, language, data) in newImages)
             {
-                ok &= UpdateResource(update, RT_ICON, (IntPtr)id, language, data, (uint)data.Length);
+                if (error == 0 && !UpdateResource(update, RT_ICON, (IntPtr)id, language, data, (uint)data.Length))
+                {
+                    error = Marshal.GetLastWin32Error();
+                }
             }
 
-            ok &= UpdateResource(update, RT_GROUP_ICON, (IntPtr)FrontGroup, front.Language, frontDirectory, (uint)frontDirectory.Length);
-            ok &= UpdateResource(update, RT_GROUP_ICON, (IntPtr)BackGroup, back.Language, backDirectory, (uint)backDirectory.Length);
-
-            if (!EndUpdateResource(update, !ok) || !ok)
+            if (error == 0 && !UpdateResource(update, RT_GROUP_ICON, (IntPtr)FrontGroup, front.Language, frontDirectory, (uint)frontDirectory.Length))
             {
-                return false;
+                error = Marshal.GetLastWin32Error();
+            }
+
+            if (error == 0 && !UpdateResource(update, RT_GROUP_ICON, (IntPtr)BackGroup, back.Language, backDirectory, (uint)backDirectory.Length))
+            {
+                error = Marshal.GetLastWin32Error();
+            }
+
+            if (!EndUpdateResource(update, error != 0))
+            {
+                error = error != 0 ? error : Marshal.GetLastWin32Error();
+                throw new Win32Exception(error, "the patched copy could not be saved");
+            }
+
+            if (error != 0)
+            {
+                throw new Win32Exception(error, "the copy could not be patched");
             }
 
             // The copy must read back with the new pictures
             module = LoadLibraryEx(file, IntPtr.Zero, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
             if (module == IntPtr.Zero)
             {
-                return false;
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "the patched copy could not be read back");
             }
 
             try
             {
-                IconGroup check = ReadGroup(module, FrontGroup, false);
-                return check != null && check.Images.Count == vista.Images.Count;
+                IconGroup check = ReadGroup(module, FrontGroup);
+                if (check == null || check.Images.Count != vista.Images.Count)
+                {
+                    throw new InvalidOperationException("the patched copy does not hold Vista's folder");
+                }
             }
             finally
             {
@@ -5303,7 +5449,7 @@ namespace RetroBar.Utilities
             }
         }
 
-        private static IconGroup ReadGroup(IntPtr module, int groupId, bool anyLanguage)
+        private static IconGroup ReadGroup(IntPtr module, int groupId)
         {
             ushort? language = null;
             EnumResLangProc callback = (m, t, n, lang, p) =>
@@ -5335,12 +5481,8 @@ namespace RetroBar.Utilities
             for (int i = 0; i < count; i++)
             {
                 int iconId = BitConverter.ToUInt16(directory, 6 + i * 14 + 12);
-                byte[] image = ReadResource(module, RT_ICON, iconId, language.Value);
-
-                if (image == null && anyLanguage)
-                {
-                    image = ReadResourceAnyLanguage(module, RT_ICON, iconId);
-                }
+                // The pictures may be stored under another language than their group
+                byte[] image = ReadResource(module, RT_ICON, iconId, language.Value) ?? ReadResourceAnyLanguage(module, RT_ICON, iconId);
 
                 if (image == null)
                 {
@@ -5629,6 +5771,8 @@ namespace RetroBar.Utilities
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "RetroBar", "FolderFrames");
 
         private static string StatePath() => Path.Combine(WorkFolder(), "state.json");
+
+        private static string LogPath() => Path.Combine(WorkFolder(), "helper.log");
 
         /// <summary>Windows' own file, moved here while the patched copy is in its place.</summary>
         private static string ParkedPath() => Path.Combine(WorkFolder(), "imageres.dll.mun.windows");

@@ -216,6 +216,9 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
   the watchdog (`--vista-folder-frames-watch`) then restarts Explorer. Windows' file is never edited in place. Every
   step is recorded in `state.json` before it happens so an interruption is repaired on the next start or by the
   uninstaller; if Windows replaced the file meanwhile (update, SFC), Windows' file wins. Windows 11 only.
+  The helper never fails silently: each step goes to `%ProgramData%\RetroBar\FolderFrames\helper.log`, and a failure
+  is shown to the user with the step and reason (`ShowFailure`). Icon resources are read in whatever language they are
+  stored under; moves of a file Windows briefly holds are retried.
   2. the `IconResource` line of the `desktop.ini` of the user's special folders, rewritten in its own encoding with its
      attributes kept; folders under OneDrive are never touched, so nothing syncs to other PCs;
   3. Windows' stock icons in `HKLM\...\Explorer\Shell Icons`, written only by the elevated helper
