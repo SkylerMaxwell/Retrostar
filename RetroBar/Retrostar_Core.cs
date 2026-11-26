@@ -4756,10 +4756,12 @@ namespace RetroBar.Utilities
 {
     using ManagedShell.Common.Logging;
     using System;
+    using System.Buffers.Binary;
     using System.Collections.Generic;
     using System.ComponentModel;
     using System.Diagnostics;
     using System.IO;
+    using System.Linq;
     using System.Runtime.InteropServices;
     using System.Security.Cryptography;
     using System.Security.Principal;
@@ -5459,7 +5461,6 @@ namespace RetroBar.Utilities
         private const uint LOAD_LIBRARY_AS_DATAFILE = 0x2;
         private const uint LOAD_LIBRARY_AS_IMAGE_RESOURCE = 0x20;
 
-        private delegate bool EnumResNameProc(IntPtr module, IntPtr type, IntPtr name, IntPtr param);
         private delegate bool EnumResLangProc(IntPtr module, IntPtr type, IntPtr name, ushort language, IntPtr param);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -5467,9 +5468,6 @@ namespace RetroBar.Utilities
 
         [DllImport("kernel32.dll")]
         private static extern bool FreeLibrary(IntPtr module);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-        private static extern bool EnumResourceNames(IntPtr module, IntPtr type, EnumResNameProc callback, IntPtr param);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
         private static extern bool EnumResourceLanguages(IntPtr module, IntPtr type, IntPtr name, EnumResLangProc callback, IntPtr param);
@@ -5486,122 +5484,34 @@ namespace RetroBar.Utilities
         [DllImport("kernel32.dll")]
         private static extern uint SizeofResource(IntPtr module, IntPtr resource);
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern IntPtr BeginUpdateResource(string fileName, bool deleteExisting);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern bool UpdateResource(IntPtr update, IntPtr type, IntPtr name, ushort language, byte[] data, uint size);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool EndUpdateResource(IntPtr update, bool discard);
-
-        /// <summary>A resource group: its language and the bytes of each icon it lists, in order.</summary>
-        private sealed class IconGroup
-        {
-            public ushort Language;
-            public byte[] Directory;
-            public List<byte[]> Images = new List<byte[]>();
-        }
-
         /// <summary>
-        /// Front (6) becomes Vista's folder, back (5) becomes transparent, in the same sizes as before. Throws with the
-        /// reason if the copy cannot be patched.
+        /// Front (6) becomes Vista's folder and back (5) becomes transparent. Windows' resource-editing API refuses
+        /// Windows 11's .mun files, so the copy is edited directly: the pictures are added at the end of its last section,
+        /// the existing icon entries are pointed at them and the two group directories are rewritten in place (same
+        /// count, same size). Every other resource stays byte for byte as it was. Throws with the reason if it cannot.
         /// </summary>
         private static void Patch(string file, string vistaFile)
         {
-            IconGroup back, front, vista;
-            int nextId;
+            var image = new PeImage(File.ReadAllBytes(file));
+            IconGroup front = image.Group(FrontGroup);
+            IconGroup back = image.Group(BackGroup);
+            IconGroup vista = new PeImage(File.ReadAllBytes(vistaFile)).Group(VistaFolderGroup);
 
-            IntPtr module = LoadLibraryEx(file, IntPtr.Zero, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
-            if (module == IntPtr.Zero)
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Windows' file could not be read as resources");
-            }
-
-            try
-            {
-                back = ReadGroup(module, BackGroup);
-                front = ReadGroup(module, FrontGroup);
-                nextId = MaxIconId(module) + 1;
-            }
-            finally
-            {
-                FreeLibrary(module);
-            }
-
-            module = LoadLibraryEx(vistaFile, IntPtr.Zero, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
-            if (module == IntPtr.Zero)
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Vista's file could not be read");
-            }
-
-            try
-            {
-                vista = ReadGroup(module, VistaFolderGroup);
-            }
-            finally
-            {
-                FreeLibrary(module);
-            }
-
-            // Not Windows 11's layout (or not Vista's file): nothing is changed
-            if (back == null || front == null)
+            if (front == null || back == null)
             {
                 throw new InvalidOperationException("Windows' file has no folder pictures (icon groups 5 and 6)");
             }
 
-            if (vista == null || vista.Images.Count == 0)
+            if (vista == null || vista.Items.Count == 0)
             {
                 throw new InvalidOperationException("Vista's folder (icon group 3) could not be read");
             }
 
-            if (nextId <= 0 || nextId + 64 > ushort.MaxValue)
-            {
-                throw new InvalidOperationException("no free icon IDs in Windows' file");
-            }
+            byte[] patched = image.WithFolderPictures(front, back, vista);
+            File.WriteAllBytes(file, patched);
 
-            var newImages = new List<(int id, ushort language, byte[] data)>();
-            byte[] frontDirectory = BuildDirectory(vista, front.Language, ref nextId, newImages);
-            byte[] backDirectory = BuildTransparentDirectory(back, ref nextId, newImages);
-
-            IntPtr update = BeginUpdateResource(file, false);
-            if (update == IntPtr.Zero)
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "the copy could not be opened for patching");
-            }
-
-            int error = 0;
-            foreach (var (id, language, data) in newImages)
-            {
-                if (error == 0 && !UpdateResource(update, RT_ICON, (IntPtr)id, language, data, (uint)data.Length))
-                {
-                    error = Marshal.GetLastWin32Error();
-                }
-            }
-
-            if (error == 0 && !UpdateResource(update, RT_GROUP_ICON, (IntPtr)FrontGroup, front.Language, frontDirectory, (uint)frontDirectory.Length))
-            {
-                error = Marshal.GetLastWin32Error();
-            }
-
-            if (error == 0 && !UpdateResource(update, RT_GROUP_ICON, (IntPtr)BackGroup, back.Language, backDirectory, (uint)backDirectory.Length))
-            {
-                error = Marshal.GetLastWin32Error();
-            }
-
-            if (!EndUpdateResource(update, error != 0))
-            {
-                error = error != 0 ? error : Marshal.GetLastWin32Error();
-                throw new Win32Exception(error, "the patched copy could not be saved");
-            }
-
-            if (error != 0)
-            {
-                throw new Win32Exception(error, "the copy could not be patched");
-            }
-
-            // The copy must read back with the new pictures
-            module = LoadLibraryEx(file, IntPtr.Zero, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+            // Windows' own resource loader must read the new pictures back from the copy
+            IntPtr module = LoadLibraryEx(file, IntPtr.Zero, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
             if (module == IntPtr.Zero)
             {
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "the patched copy could not be read back");
@@ -5609,10 +5519,21 @@ namespace RetroBar.Utilities
 
             try
             {
-                IconGroup check = ReadGroup(module, FrontGroup);
-                if (check == null || check.Images.Count != vista.Images.Count)
+                List<byte[]> frontImages = ReadGroupImages(module, FrontGroup);
+                List<byte[]> backImages = ReadGroupImages(module, BackGroup);
+                IconGroup expected = new PeImage(patched).Group(FrontGroup);
+
+                if (frontImages == null || backImages == null || frontImages.Count != front.Items.Count || backImages.Count != back.Items.Count)
                 {
-                    throw new InvalidOperationException("the patched copy does not hold Vista's folder");
+                    throw new InvalidOperationException("Windows does not read the folder pictures from the patched copy");
+                }
+
+                for (int i = 0; i < frontImages.Count; i++)
+                {
+                    if (!frontImages[i].AsSpan().SequenceEqual(expected.Items[i].Data))
+                    {
+                        throw new InvalidOperationException("Windows reads other pictures from the patched copy than were written");
+                    }
                 }
             }
             finally
@@ -5621,7 +5542,38 @@ namespace RetroBar.Utilities
             }
         }
 
-        private static IconGroup ReadGroup(IntPtr module, int groupId)
+        /// <summary>The pictures of an icon group as Windows' resource loader reads them; null if it cannot.</summary>
+        private static List<byte[]> ReadGroupImages(IntPtr module, int groupId)
+        {
+            ushort? language = FirstLanguage(module, RT_GROUP_ICON, groupId);
+            byte[] directory = language == null ? null : ReadResource(module, RT_GROUP_ICON, groupId, language.Value);
+            if (directory == null || directory.Length < 6)
+            {
+                return null;
+            }
+
+            int count = BinaryPrimitives.ReadUInt16LittleEndian(directory.AsSpan(4));
+            var images = new List<byte[]>();
+
+            for (int i = 0; i < count && 6 + i * 14 + 14 <= directory.Length; i++)
+            {
+                int iconId = BinaryPrimitives.ReadUInt16LittleEndian(directory.AsSpan(6 + i * 14 + 12));
+                ushort? iconLanguage = FirstLanguage(module, RT_ICON, iconId);
+                byte[] picture = ReadResource(module, RT_ICON, iconId, language.Value)
+                    ?? (iconLanguage == null ? null : ReadResource(module, RT_ICON, iconId, iconLanguage.Value));
+
+                if (picture == null)
+                {
+                    return null;
+                }
+
+                images.Add(picture);
+            }
+
+            return images;
+        }
+
+        private static ushort? FirstLanguage(IntPtr module, IntPtr type, int id)
         {
             ushort? language = null;
             EnumResLangProc callback = (m, t, n, lang, p) =>
@@ -5629,56 +5581,9 @@ namespace RetroBar.Utilities
                 language = lang;
                 return false; // the first is enough
             };
-            EnumResourceLanguages(module, RT_GROUP_ICON, (IntPtr)groupId, callback, IntPtr.Zero);
-            GC.KeepAlive(callback);
-
-            if (language == null)
-            {
-                return null;
-            }
-
-            byte[] directory = ReadResource(module, RT_GROUP_ICON, groupId, language.Value);
-            if (directory == null || directory.Length < 6 || BitConverter.ToUInt16(directory, 2) != 1)
-            {
-                return null;
-            }
-
-            int count = BitConverter.ToUInt16(directory, 4);
-            if (directory.Length < 6 + count * 14)
-            {
-                return null;
-            }
-
-            var group = new IconGroup { Language = language.Value, Directory = directory };
-            for (int i = 0; i < count; i++)
-            {
-                int iconId = BitConverter.ToUInt16(directory, 6 + i * 14 + 12);
-                // The pictures may be stored under another language than their group
-                byte[] image = ReadResource(module, RT_ICON, iconId, language.Value) ?? ReadResourceAnyLanguage(module, RT_ICON, iconId);
-
-                if (image == null)
-                {
-                    return null;
-                }
-
-                group.Images.Add(image);
-            }
-
-            return group;
-        }
-
-        private static byte[] ReadResourceAnyLanguage(IntPtr module, IntPtr type, int id)
-        {
-            ushort? language = null;
-            EnumResLangProc callback = (m, t, n, lang, p) =>
-            {
-                language = lang;
-                return false;
-            };
             EnumResourceLanguages(module, type, (IntPtr)id, callback, IntPtr.Zero);
             GC.KeepAlive(callback);
-
-            return language == null ? null : ReadResource(module, type, id, language.Value);
+            return language;
         }
 
         private static byte[] ReadResource(IntPtr module, IntPtr type, int id, ushort language)
@@ -5701,68 +5606,377 @@ namespace RetroBar.Utilities
             return bytes;
         }
 
-        private static int MaxIconId(IntPtr module)
+        /// <summary>An icon group as stored in the file: where its directory entry is, and each picture's entry and bytes.</summary>
+        private sealed class IconGroup
         {
-            int max = -1;
-            EnumResNameProc callback = (m, t, name, p) =>
+            public int Entry;
+            public ushort Language;
+            public byte[] Directory;
+            public List<IconItem> Items = new List<IconItem>();
+        }
+
+        private sealed class IconItem
+        {
+            public byte[] Meta;  // the first 12 bytes of its GRPICONDIRENTRY
+            public int Entry;    // file offset of its IMAGE_RESOURCE_DATA_ENTRY
+            public byte[] Data;
+
+            public int Width => Meta[0] == 0 ? 256 : Meta[0];
+            public int Height => Meta[1] == 0 ? 256 : Meta[1];
+            public int BitCount => BinaryPrimitives.ReadUInt16LittleEndian(Meta.AsSpan(6));
+        }
+
+        /// <summary>A PE file's headers, sections and resource tree, read from its bytes (no code is loaded).</summary>
+        private sealed class PeImage
+        {
+            private const int RT_ICON_ID = 3;
+            private const int RT_GROUP_ICON_ID = 14;
+
+            private sealed class Section
             {
-                long value = name.ToInt64();
-                if ((value >> 16) == 0)
+                public int Header;
+                public uint VirtualSize;
+                public uint VirtualAddress;
+                public uint RawSize;
+                public uint RawPointer;
+            }
+
+            private readonly byte[] _data;
+            private readonly int _optionalHeader;
+            private readonly int _dataDirectories;
+            private readonly uint _dataDirectoryCount;
+            private readonly uint _sectionAlignment;
+            private readonly uint _fileAlignment;
+            private readonly int _resources;
+            private readonly List<Section> _sections = new List<Section>();
+
+            public PeImage(byte[] data)
+            {
+                _data = data;
+
+                if (data.Length < 0x40 || data[0] != 'M' || data[1] != 'Z')
                 {
-                    max = Math.Max(max, (int)value);
+                    throw new InvalidDataException("not a PE file");
                 }
 
-                return true;
-            };
-            EnumResourceNames(module, RT_ICON, callback, IntPtr.Zero);
-            GC.KeepAlive(callback);
-            return max;
-        }
+                int pe = (int)U32(0x3C);
+                if (pe <= 0 || pe + 24 > data.Length || U32(pe) != 0x00004550)
+                {
+                    throw new InvalidDataException("not a PE file");
+                }
 
-        /// <summary>A group directory listing the given group's pictures under new icon IDs.</summary>
-        private static byte[] BuildDirectory(IconGroup source, ushort language, ref int nextId, List<(int, ushort, byte[])> newImages)
-        {
-            byte[] directory = (byte[])source.Directory.Clone();
-            int count = BitConverter.ToUInt16(directory, 4);
-            Array.Resize(ref directory, 6 + count * 14);
+                int fileHeader = pe + 4;
+                int sectionCount = U16(fileHeader + 2);
+                int optionalSize = U16(fileHeader + 16);
+                _optionalHeader = fileHeader + 20;
 
-            for (int i = 0; i < count; i++)
-            {
-                int id = nextId++;
-                byte[] image = source.Images[i];
-                BitConverter.GetBytes((uint)image.Length).CopyTo(directory, 6 + i * 14 + 8);
-                BitConverter.GetBytes((ushort)id).CopyTo(directory, 6 + i * 14 + 12);
-                newImages.Add((id, language, image));
+                ushort magic = U16(_optionalHeader);
+                _dataDirectories = magic == 0x10b ? _optionalHeader + 96 : magic == 0x20b ? _optionalHeader + 112
+                    : throw new InvalidDataException("unknown PE optional header");
+                _dataDirectoryCount = U32(_dataDirectories - 4);
+                _sectionAlignment = U32(_optionalHeader + 32);
+                _fileAlignment = U32(_optionalHeader + 36);
+
+                int sectionTable = _optionalHeader + optionalSize;
+                for (int i = 0; i < sectionCount; i++)
+                {
+                    int header = sectionTable + i * 40;
+                    _sections.Add(new Section
+                    {
+                        Header = header,
+                        VirtualSize = U32(header + 8),
+                        VirtualAddress = U32(header + 12),
+                        RawSize = U32(header + 16),
+                        RawPointer = U32(header + 20)
+                    });
+                }
+
+                uint resourceRva = _dataDirectoryCount > 2 ? U32(_dataDirectories + 2 * 8) : 0;
+                if (resourceRva == 0)
+                {
+                    throw new InvalidDataException("the file has no resources");
+                }
+
+                _resources = Offset(resourceRva);
             }
 
-            return directory;
-        }
+            private ushort U16(int offset) => BinaryPrimitives.ReadUInt16LittleEndian(_data.AsSpan(offset, 2));
 
-        /// <summary>A group directory of fully transparent pictures, one per size the given group has.</summary>
-        private static byte[] BuildTransparentDirectory(IconGroup source, ref int nextId, List<(int, ushort, byte[])> newImages)
-        {
-            byte[] directory = (byte[])source.Directory.Clone();
-            int count = BitConverter.ToUInt16(directory, 4);
-            Array.Resize(ref directory, 6 + count * 14);
+            private uint U32(int offset) => BinaryPrimitives.ReadUInt32LittleEndian(_data.AsSpan(offset, 4));
 
-            for (int i = 0; i < count; i++)
+            /// <summary>The file offset of an address in the image.</summary>
+            private int Offset(uint rva)
             {
-                int offset = 6 + i * 14;
-                int width = directory[offset] == 0 ? 256 : directory[offset];
-                int height = directory[offset + 1] == 0 ? 256 : directory[offset + 1];
-                byte[] image = TransparentImage(width, height);
-                int id = nextId++;
+                foreach (Section section in _sections)
+                {
+                    if (rva >= section.VirtualAddress && rva < section.VirtualAddress + Math.Max(section.VirtualSize, section.RawSize))
+                    {
+                        uint delta = rva - section.VirtualAddress;
+                        if (delta >= section.RawSize)
+                        {
+                            break;
+                        }
 
-                directory[offset + 2] = 0; // colour count
-                directory[offset + 3] = 0;
-                BitConverter.GetBytes((ushort)1).CopyTo(directory, offset + 4);  // planes
-                BitConverter.GetBytes((ushort)32).CopyTo(directory, offset + 6); // bits per pixel
-                BitConverter.GetBytes((uint)image.Length).CopyTo(directory, offset + 8);
-                BitConverter.GetBytes((ushort)id).CopyTo(directory, offset + 12);
-                newImages.Add((id, source.Language, image));
+                        return checked((int)(section.RawPointer + delta));
+                    }
+                }
+
+                throw new InvalidDataException($"address 0x{rva:X} is not stored in the file");
             }
 
-            return directory;
+            private IEnumerable<(uint name, uint offset)> Entries(int directory)
+            {
+                int count = U16(directory + 12) + U16(directory + 14);
+                for (int i = 0; i < count; i++)
+                {
+                    int entry = directory + 16 + i * 8;
+                    yield return (U32(entry), U32(entry + 4));
+                }
+            }
+
+            private int SubDirectory(int directory, int id)
+            {
+                foreach (var (name, offset) in Entries(directory))
+                {
+                    if ((name & 0x80000000) == 0 && name == id)
+                    {
+                        if ((offset & 0x80000000) == 0)
+                        {
+                            throw new InvalidDataException("unexpected resource layout");
+                        }
+
+                        return _resources + (int)(offset & 0x7FFFFFFF);
+                    }
+                }
+
+                return -1;
+            }
+
+            /// <summary>The file offset of a resource's data entry in the given language (else its first), and that language.</summary>
+            private (int entry, ushort language) DataEntry(int type, int id, ushort? language)
+            {
+                int types = SubDirectory(_resources, type);
+                int names = types < 0 ? -1 : SubDirectory(types, id);
+                if (names < 0)
+                {
+                    return (-1, 0);
+                }
+
+                (int, ushort) first = (-1, 0);
+                foreach (var (name, offset) in Entries(names))
+                {
+                    if ((offset & 0x80000000) != 0)
+                    {
+                        continue;
+                    }
+
+                    if (first.Item1 < 0)
+                    {
+                        first = (_resources + (int)offset, (ushort)name);
+                    }
+
+                    if (language != null && name == language.Value)
+                    {
+                        return (_resources + (int)offset, (ushort)name);
+                    }
+                }
+
+                return first;
+            }
+
+            private byte[] Read(int entry)
+            {
+                int offset = Offset(U32(entry));
+                return _data.AsSpan(offset, checked((int)U32(entry + 4))).ToArray();
+            }
+
+            public IconGroup Group(int id)
+            {
+                var (entry, language) = DataEntry(RT_GROUP_ICON_ID, id, null);
+                if (entry < 0)
+                {
+                    return null;
+                }
+
+                byte[] directory = Read(entry);
+                if (directory.Length < 6 || BinaryPrimitives.ReadUInt16LittleEndian(directory.AsSpan(2)) != 1)
+                {
+                    throw new InvalidDataException($"icon group {id} is not an icon directory");
+                }
+
+                int count = BinaryPrimitives.ReadUInt16LittleEndian(directory.AsSpan(4));
+                if (directory.Length < 6 + count * 14)
+                {
+                    throw new InvalidDataException($"icon group {id} is cut short");
+                }
+
+                var group = new IconGroup { Entry = entry, Language = language, Directory = directory };
+                for (int i = 0; i < count; i++)
+                {
+                    int iconId = BinaryPrimitives.ReadUInt16LittleEndian(directory.AsSpan(6 + i * 14 + 12));
+                    var (iconEntry, _) = DataEntry(RT_ICON_ID, iconId, language);
+                    if (iconEntry < 0)
+                    {
+                        throw new InvalidDataException($"icon {iconId} of group {id} is missing");
+                    }
+
+                    group.Items.Add(new IconItem
+                    {
+                        Meta = directory.AsSpan(6 + i * 14, 12).ToArray(),
+                        Entry = iconEntry,
+                        Data = Read(iconEntry)
+                    });
+                }
+
+                return group;
+            }
+
+            /// <summary>
+            /// A copy of the file in which the front group shows Vista's folder (its 32-bit pictures, the nearest size at or
+            /// above each original size) and the back group shows transparent pictures of the original sizes.
+            /// </summary>
+            public byte[] WithFolderPictures(IconGroup front, IconGroup back, IconGroup vista)
+            {
+                byte[] d = (byte[])_data.Clone();
+
+                // The section that ends last in memory takes the pictures; it must also end the file's sections
+                Section last = _sections.OrderBy(section => section.VirtualAddress).Last();
+                uint end = last.RawPointer + last.RawSize;
+                if (_sections.Any(section => section.RawPointer + section.RawSize > end))
+                {
+                    throw new InvalidDataException("the file's last section is not at its end");
+                }
+
+                // Anything after it can only be an embedded signature, which no longer matches once edited: it goes
+                uint signature = _dataDirectoryCount > 4 ? U32(_dataDirectories + 4 * 8) : 0;
+                if (d.Length > end)
+                {
+                    if (signature == 0 || signature < end)
+                    {
+                        throw new InvalidDataException("unknown data after the file's last section");
+                    }
+
+                    Array.Resize(ref d, (int)end);
+                    BinaryPrimitives.WriteUInt64LittleEndian(d.AsSpan(_dataDirectories + 4 * 8), 0);
+                }
+
+                uint startRva = last.VirtualAddress + Align(Math.Max(last.VirtualSize, last.RawSize), 16);
+                uint startOffset = last.RawPointer + (startRva - last.VirtualAddress);
+                var blob = new MemoryStream();
+
+                uint Add(byte[] picture)
+                {
+                    while (blob.Length % 8 != 0)
+                    {
+                        blob.WriteByte(0);
+                    }
+
+                    uint rva = startRva + (uint)blob.Length;
+                    blob.Write(picture, 0, picture.Length);
+                    return rva;
+                }
+
+                // Vista's 32-bit pictures (with transparency), smallest first
+                List<IconItem> pictures = vista.Items.Where(item => item.BitCount == 32).OrderBy(item => item.Width).ToList();
+                if (pictures.Count == 0)
+                {
+                    pictures = vista.Items.OrderBy(item => item.Width).ToList();
+                }
+
+                var added = new Dictionary<IconItem, uint>();
+                byte[] frontDirectory = (byte[])front.Directory.Clone();
+
+                for (int i = 0; i < front.Items.Count; i++)
+                {
+                    IconItem item = front.Items[i];
+                    IconItem picture = pictures.FirstOrDefault(p => p.Width >= item.Width) ?? pictures[pictures.Count - 1];
+
+                    if (!added.TryGetValue(picture, out uint rva))
+                    {
+                        rva = Add(picture.Data);
+                        added[picture] = rva;
+                    }
+
+                    BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(item.Entry), rva);
+                    BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(item.Entry + 4), (uint)picture.Data.Length);
+
+                    byte[] meta = (byte[])picture.Meta.Clone();
+                    BinaryPrimitives.WriteUInt32LittleEndian(meta.AsSpan(8), (uint)picture.Data.Length);
+                    meta.CopyTo(frontDirectory, 6 + i * 14);
+                }
+
+                byte[] backDirectory = (byte[])back.Directory.Clone();
+
+                for (int i = 0; i < back.Items.Count; i++)
+                {
+                    IconItem item = back.Items[i];
+                    byte[] transparent = TransparentImage(item.Width, item.Height);
+                    uint rva = Add(transparent);
+
+                    BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(item.Entry), rva);
+                    BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(item.Entry + 4), (uint)transparent.Length);
+
+                    byte[] meta = (byte[])item.Meta.Clone();
+                    meta[2] = 0; // colour count
+                    meta[3] = 0;
+                    BinaryPrimitives.WriteUInt16LittleEndian(meta.AsSpan(4), 1);  // planes
+                    BinaryPrimitives.WriteUInt16LittleEndian(meta.AsSpan(6), 32); // bits per pixel
+                    BinaryPrimitives.WriteUInt32LittleEndian(meta.AsSpan(8), (uint)transparent.Length);
+                    meta.CopyTo(backDirectory, 6 + i * 14);
+                }
+
+                // The group directories keep their size: rewritten where they are
+                frontDirectory.CopyTo(d, Offset(U32(front.Entry)));
+                backDirectory.CopyTo(d, Offset(U32(back.Entry)));
+
+                // The section grows to hold the pictures
+                byte[] pictureBytes = blob.ToArray();
+                uint rawSize = Align(startOffset + (uint)pictureBytes.Length - last.RawPointer, _fileAlignment);
+                byte[] result = new byte[last.RawPointer + rawSize];
+                Array.Copy(d, result, d.Length);
+                pictureBytes.CopyTo(result, (int)startOffset);
+
+                uint virtualSize = Math.Max(last.VirtualSize, startRva + (uint)pictureBytes.Length - last.VirtualAddress);
+                BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(last.Header + 8), virtualSize);
+                BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(last.Header + 16), rawSize);
+
+                uint imageSize = Math.Max(U32(_optionalHeader + 56), Align(last.VirtualAddress + virtualSize, _sectionAlignment));
+                BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(_optionalHeader + 56), imageSize);
+
+                int checksumField = _optionalHeader + 64;
+                BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(checksumField), 0);
+                BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(checksumField), Checksum(result, checksumField));
+                return result;
+            }
+
+            private static uint Align(uint value, uint alignment) => alignment == 0 ? value : (value + alignment - 1) / alignment * alignment;
+
+            /// <summary>The PE checksum (as CheckSumMappedFile computes it), skipping the checksum field itself.</summary>
+            private static uint Checksum(byte[] data, int checksumField)
+            {
+                ulong total = 0;
+                int even = data.Length - data.Length % 2;
+
+                for (int i = 0; i < even; i += 2)
+                {
+                    if (i == checksumField || i == checksumField + 2)
+                    {
+                        continue;
+                    }
+
+                    total += (uint)(data[i] | data[i + 1] << 8);
+                    total = (total & 0xFFFF) + (total >> 16);
+                }
+
+                if (data.Length % 2 != 0)
+                {
+                    total += data[data.Length - 1];
+                    total = (total & 0xFFFF) + (total >> 16);
+                }
+
+                total = (total & 0xFFFF) + (total >> 16);
+                return (uint)((total + (ulong)data.Length) & 0xFFFFFFFF);
+            }
         }
 
         /// <summary>A 32-bit icon picture with every pixel fully transparent.</summary>

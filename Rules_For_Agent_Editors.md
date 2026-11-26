@@ -219,6 +219,12 @@ Code must compile for both target frameworks: do not use APIs that `net6.0-windo
   The helper never fails silently: each step goes to `%ProgramData%\RetroBar\FolderFrames\helper.log`, and a failure
   is shown to the user with the step and reason (`ShowFailure`). Icon resources are read in whatever language they are
   stored under; moves of a file Windows briefly holds are retried.
+  Never use `BeginUpdateResource`/`UpdateResource` on the .mun: Windows 11 (build 26200) refuses it. The copy is edited
+  directly (`PeImage.WithFolderPictures`): new pictures are appended to the last section, the existing RT_ICON data
+  entries of groups 5 and 6 are pointed at them, and both group directories are rewritten in place (same count), so
+  the resource tree and every other resource stay byte-identical; section sizes, SizeOfImage and the PE checksum are
+  updated. Windows' own loader then reads the copy back and must return exactly the pictures written. The algorithm
+  was verified against Vista's imageres.dll (22 resources changed, 2139 byte-identical, valid headers and checksum).
   2. the `IconResource` line of the `desktop.ini` of the user's special folders, rewritten in its own encoding with its
      attributes kept; folders under OneDrive are never touched, so nothing syncs to other PCs;
   3. Windows' stock icons in `HKLM\...\Explorer\Shell Icons`, written only by the elevated helper
